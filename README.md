@@ -28,6 +28,27 @@ devmate read README.md --dry-run
 
 `scan` não faz rede; `mock` é determinístico e não chama uma LLM. Use `devmate status`, `timeline`, `decisions` e `questions` para consultar o estado local.
 
+## Docker
+
+O ambiente Docker inclui Python 3.12, Git, dependências bloqueadas em `uv.lock` e a CLI. A imagem não incorpora `.git`, `.devmate`, `.env` nem caches; o Compose monta o repositório atual, portanto o estado local continua no host.
+
+```bash
+docker compose build
+docker compose run --rm devmate init
+docker compose run --rm devmate scan
+docker compose run --rm devmate ask --provider mock "O que mudou?"
+docker compose run --rm devmate read README.md --dry-run
+```
+
+Para abrir o shell da imagem ou executar as verificações:
+
+```bash
+docker compose run --rm --entrypoint sh devmate
+docker compose run --rm --entrypoint sh devmate -lc "uv sync --all-extras && uv run pytest"
+```
+
+Em contêiner, o provider de fala do sistema não acessa a voz do host; use `read --dry-run` ou altere o provider para `null` em testes. Providers remotos continuam opt-in e exigem as credenciais configuradas no ambiente do contêiner.
+
 ## Providers
 
 O provider padrão é configurado em `.devmate/config.toml`, ou por `DEVMATE_PROVIDER`. Credenciais ficam somente no ambiente, nunca no TOML.

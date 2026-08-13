@@ -1,0 +1,12 @@
+services:
+  devmate:
+    build:
+      context: .
+      target: development
+    working_dir: /workspace
+    environment:
+      PYTHONPATH: /workspace/src
+    volumes:
+      # Mantém código, .git e estado .devmate locais e persistentes no host.
+      - .:/workspace
+    command: ["--help"]

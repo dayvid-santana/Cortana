@@ -1,0 +1,14 @@
+.git
+.devmate
+.venv
+.uv-cache
+.uv-python
+.mypy_cache
+.pytest_cache
+.ruff_cache
+__pycache__
+*.py[cod]
+.env
+dist
+build
+*.egg-info
