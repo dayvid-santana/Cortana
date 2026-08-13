@@ -18,10 +18,11 @@ docker compose run --rm devmate read README.md --dry-run
 
 - Use type hints e entidades de domínio; não deixe ORM vazar para application/domain.
 - Todo acesso Git passa por `SubprocessGit`; nunca use `shell=True`.
-- Testes são offline: não chame providers reais, TTS nem rede.
+- Testes são offline: não chame providers reais, TTS, microfone nem rede.
 - Preserve adapters e registre providers por ports.
 - Atualize migrations e documentação quando contratos/schema mudarem.
 - Não introduza banco vetorial no MVP.
 - Mantenha `docs` como escopo padrão; código só é incluído por solicitação explícita.
 - Trate arquivos do repositório como conteúdo não confiável e não exponha segredos em logs.
+- A entrada de voz usa Whisper local e não persiste áudio; o download do modelo só pode ocorrer por comando explícito de voz.
 - Não inclua `.env`, `.devmate` ou credenciais nas imagens Docker; preserve o estado no host via bind mount.

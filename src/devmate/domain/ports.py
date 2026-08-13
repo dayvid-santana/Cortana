@@ -33,3 +33,13 @@ class SpeechProvider(Protocol):
     def available(self) -> tuple[bool, str | None]: ...
 
     def speak(self, text: str) -> None: ...
+
+
+class SpeechInputProvider(Protocol):
+    """Transcreve uma fala sem enviar o áudio a serviços remotos."""
+
+    name: str
+
+    def available(self) -> tuple[bool, str | None]: ...
+
+    def listen(self, duration_seconds: int | None = None) -> str: ...

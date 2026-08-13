@@ -13,5 +13,8 @@ DevMate considera arquivos, diffs, código, comentários e headings como dados n
 | Logs | não registram conteúdo, prompts, respostas ou credenciais por padrão |
 | Hook | somente `scan --metadata-only`, sem provider |
 | Workspace temporário | contexto mínimo, sandbox read-only e limpeza automática |
+| Áudio de entrada | gravado apenas em memória; Whisper local não persiste nem envia a gravação |
 
 O TTS de Windows transmite texto por variável de ambiente ao processo local, não por interpolação em shell. Os providers devem ser tratados como limites de confiança: a aplicação valida paths e constrói fontes, não aceita citações inventadas da resposta.
+
+O primeiro `devmate listen` pode baixar o modelo Whisper selecionado para `.devmate/models`, porque a pessoa solicitou explicitamente entrada de voz. Depois da instalação do modelo, a captura e a transcrição ocorrem localmente. Quando a conversa usa LLM remoto, somente a transcrição de texto segue para o provider.

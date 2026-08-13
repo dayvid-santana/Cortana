@@ -65,6 +65,8 @@ docker compose run --rm devmate read README.md --dry-run
 docker compose run --rm devmate read docs/architecture.md --section "Arquitetura" --dry-run
 ```
 
+Da mesma forma, a captura do microfone para `devmate listen` deve ser executada no host, não no contêiner Docker.
+
 ## 6. Inspeção explícita de código
 
 O contexto padrão do DevMate contém somente documentação. Para incluir código, escolha os arquivos de maneira explícita:

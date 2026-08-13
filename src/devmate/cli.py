@@ -273,6 +273,54 @@ def chat(
 
 
 @app.command()
+def listen(
+    provider: Annotated[str | None, typer.Option("--provider")] = None,
+    commit: Annotated[str | None, typer.Option("--commit")] = None,
+    model: Annotated[str | None, typer.Option("--model")] = None,
+    duration: Annotated[
+        int | None,
+        typer.Option("--duration", min=1, max=60, help="Segundos de captura do microfone."),
+    ] = None,
+    no_speak: Annotated[
+        bool,
+        typer.Option("--no-speak", help="Exibe a resposta sem narrá-la."),
+    ] = False,
+    as_json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Ouve uma pergunta, responde sobre a documentação e narra o resultado."""
+    runtime = _run(_runtime, as_json)
+    if runtime is None:
+        return
+    seconds = duration or runtime.config.speech.input_duration_seconds
+    console.print(f"[cyan]Ouvindo por até {seconds} segundos. Fale agora.[/cyan]")
+    result = _run(
+        lambda: runtime.voice_service().listen_and_ask(
+            project_id=runtime.project_id,
+            provider_name=provider or runtime.config.provider.default,
+            commit_ref=commit,
+            model=model,
+            duration_seconds=duration,
+            speak_response=not no_speak,
+        ),
+        as_json,
+    )
+    if result is None:
+        return
+    data = {
+        "transcript": result.transcript,
+        "commit": result.answer.commit_hash,
+        "answer": result.answer.response.text,
+    }
+    if as_json:
+        typer.echo(json.dumps(data, ensure_ascii=False))
+        return
+    console.print(f"[bold]Você:[/bold] {result.transcript}\n")
+    console.print(
+        f"[bold]Commit {result.answer.commit_hash[:7]}[/bold]\n\n{result.answer.response.text}"
+    )
+
+
+@app.command()
 def inspect(
     question: str,
     commit: Annotated[str | None, typer.Option("--commit")] = None,

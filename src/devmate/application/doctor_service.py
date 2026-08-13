@@ -44,4 +44,7 @@ def doctor(runtime: Runtime) -> list[Check]:
     speech = runtime.reading_service().speech
     available, detail = speech.available()
     checks.append(Check(f"Fala {speech.name}", available, detail or "disponível"))
+    voice_input = runtime.voice_service().input_provider
+    available, detail = voice_input.available()
+    checks.append(Check(f"Entrada de voz {voice_input.name}", available, detail or "disponível"))
     return checks

@@ -1,0 +1,17 @@
+# Dependências de runtime do DevMate.
+# O lock reproduzível do projeto permanece em uv.lock; para desenvolvimento,
+# instale também o extra "dev" via: python -m uv sync --all-extras
+alembic>=1.13
+markdown-it-py>=3.0
+openai>=1.0
+openai-codex>=0.1
+platformdirs>=4.0
+pydantic>=2.7
+pydantic-settings>=2.2
+rich>=13.7
+sqlalchemy>=2.0
+typer>=0.12
+# Entrada de voz local (Whisper + microfone). O modelo é baixado somente em
+# `devmate listen` e fica em .devmate/models.
+faster-whisper>=1.1
+sounddevice>=0.5

@@ -48,6 +48,10 @@ class SecurityConfig(BaseModel):
 class SpeechConfig(BaseModel):
     provider: str = DEFAULT_SPEECH_PROVIDER
     rate: int = Field(default=180, ge=80, le=450)
+    input_provider: str = "faster_whisper"
+    input_model: str = "base"
+    input_language: str = "pt-BR"
+    input_duration_seconds: int = Field(default=10, ge=1, le=60)
 
 
 class LoggingConfig(BaseModel):
@@ -78,6 +82,10 @@ DEFAULT_CONFIG_TOML = (
     "[speech]\n"
     'provider = "system"\n'
     "rate = 180\n\n"
+    'input_provider = "faster_whisper"\n'
+    'input_model = "base"\n'
+    'input_language = "pt-BR"\n'
+    "input_duration_seconds = 10\n\n"
     "[logging]\n"
     "include_content = false\n"
 )

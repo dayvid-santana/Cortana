@@ -74,6 +74,19 @@ devmate read docs/architecture.md --resume
 
 O provider `system` usa o mecanismo local do sistema operacional. `null` é disponível para testes. Checkpoints são guardados no SQLite e uma retomada é recusada se o arquivo mudar.
 
+## Conversa por voz
+
+O comando abaixo grava uma pergunta curta pelo microfone, transcreve-a localmente com Whisper em CPU, responde no escopo documental e narra a resposta:
+
+```bash
+uv sync --all-extras
+devmate listen --provider mock
+```
+
+No primeiro uso, o modelo configurado (`base`) é baixado para `.devmate/models`; depois, a captura e a transcrição permanecem locais e o áudio não é salvo. Para mudar a janela de captura, use `--duration 15`. `--no-speak` mantém a transcrição e a resposta no terminal sem reproduzir áudio. Se for usado um provider remoto, somente a pergunta já transcrita — nunca a gravação — é enviada ao provider.
+
+Consulte o [guia de conversa por voz](docs/voice-usage.md) para a preparação no Windows e solução de problemas.
+
 ## Segurança
 
 - Escopo padrão é `docs`: código só entra em `inspect`, `ask --scope code` ou uma seleção explícita.
@@ -95,4 +108,4 @@ uv run pytest
 
 ## Limitações do MVP e roadmap
 
-Não há embeddings, banco vetorial, interface web, edição automática, execução de testes por agentes, entrada por voz, PDFs nem sincronização em nuvem. Veja [o roadmap](docs/roadmap.md).
+Não há embeddings, banco vetorial, interface web, edição automática, execução de testes por agentes, PDFs nem sincronização em nuvem. Veja [o roadmap](docs/roadmap.md).

@@ -61,6 +61,10 @@ class SpeechProviderUnavailableError(DevMateError):
     exit_code = 6
 
 
+class SpeechRecognitionUnavailableError(DevMateError):
+    exit_code = 6
+
+
 class ReadingSessionStaleError(DevMateError):
     exit_code = 7
 

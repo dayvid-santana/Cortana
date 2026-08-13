@@ -10,12 +10,14 @@ from devmate.adapters.git.subprocess_git import SubprocessGit
 from devmate.adapters.llm.registry import ProviderRegistry
 from devmate.adapters.persistence.database import create_database_engine, session_factory
 from devmate.adapters.persistence.repositories import RepositoryStore
-from devmate.adapters.speech.registry import get_speech_provider
+from devmate.adapters.speech.registry import get_speech_input_provider, get_speech_provider
 from devmate.application.context_service import ContextService
+from devmate.application.conversation_service import ConversationService
 from devmate.application.inspection_service import InspectionService
 from devmate.application.memory_service import MemoryService
 from devmate.application.reading_service import ReadingService
 from devmate.application.scan_service import ScanService
+from devmate.application.voice_service import VoiceConversationService
 from devmate.config import AppConfig, config_path, database_path, load_config
 from devmate.errors import ConfigurationError
 from devmate.markdown.narrator import MarkdownNarrator
@@ -54,6 +56,16 @@ class Runtime:
     def reading_service(self) -> ReadingService:
         speech = get_speech_provider(self.config.speech.provider, self.config)
         return ReadingService(self.filesystem, self.store, MarkdownNarrator(), speech)
+
+    def voice_service(self) -> VoiceConversationService:
+        output = get_speech_provider(self.config.speech.provider, self.config)
+        input_provider = get_speech_input_provider(
+            self.config.speech.input_provider,
+            self.config,
+            self.root / ".devmate" / "models",
+        )
+        conversation = ConversationService(self.store, self.context_service(), self.providers)
+        return VoiceConversationService(input_provider, output, conversation)
 
 
 def load_runtime(start: Path) -> Runtime:
