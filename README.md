@@ -66,6 +66,27 @@ devmate listen --provider codex --full-repo
 
 `codex` usa o SDK oficial `openai-codex` em `Sandbox.read_only`, com um workspace temporário que contém apenas o contexto selecionado. O comportamento de voz fica em `[language_model.providers.codex]` no `.devmate/config.toml`; esse prompt é uma instrução local confiável e não deve conter segredos. `openai` usa Responses API. `openai_compatible` exige `provider.openai_base_url` configurado e não pressupõe ferramentas ou capabilities extras.
 
+### Conectar com o Codex
+
+A autenticação do Codex é da máquina, não do projeto — o SDK reaproveita automaticamente uma sessão já existente (por exemplo, de `codex login`). `devmate codex connect` deixa essa conexão explícita e visível pela CLI:
+
+```bash
+devmate codex status              # mostra se há conta conectada, sem iniciar login
+devmate codex connect             # login por código de dispositivo (padrão)
+devmate codex connect --method browser
+OPENAI_API_KEY=... devmate codex connect --method api-key
+devmate codex disconnect          # logout local
+```
+
+Se já existir uma conta conectada, `connect` não repete o login — apenas confirma a conexão (use `--force` para reautenticar). Ao final, ele pergunta se quer definir `codex` como provider padrão do projeto (`--set-default`/`--no-set-default` pulam a pergunta) e lembra que **entender o código exige `--full-repo` ou `--files` explicitamente** — por padrão toda conversa é só sobre documentação:
+
+```bash
+devmate talk --provider codex --full-repo
+devmate ask --provider codex --scope code --full-repo "Como o hook de scan funciona?"
+```
+
+É esse escopo explícito — não a autenticação — que costuma fazer as respostas do Codex parecerem genéricas: sem `--full-repo`/`--files`, ele nunca chega a ver o seu código.
+
 ## Leitura em voz alta
 
 ```bash

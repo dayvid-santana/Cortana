@@ -30,6 +30,12 @@ def set_speech_style(path: Path, style: str | None) -> None:
     _save(path, document)
 
 
+def set_default_provider(path: Path, name: str) -> None:
+    document = _load(path)
+    _assign(document, ("provider", "default"), name)
+    _save(path, document)
+
+
 def _load(path: Path) -> tomlkit.TOMLDocument:
     if not path.exists():
         return tomlkit.document()

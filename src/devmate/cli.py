@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import json
+import os
 import sys
 import time
 from collections.abc import Callable
@@ -18,6 +19,12 @@ from rich.table import Table
 from devmate import __version__
 from devmate.adapters.hotkey.windows_hotkey import WindowsHotkey
 from devmate.application import voices_service
+from devmate.application.codex_connection_service import (
+    CodexAccount,
+    CodexConnectionService,
+    CodexLoginPrompt,
+    LoginMethod,
+)
 from devmate.application.conversation_service import ConversationService
 from devmate.application.daemon_service import DaemonService
 from devmate.application.doctor_service import doctor
@@ -26,6 +33,7 @@ from devmate.application.inspection_service import InspectionContext
 from devmate.application.project_service import initialize_project
 from devmate.application.voice_service import VoiceHelp, VoiceReading
 from devmate.bootstrap import Runtime, load_runtime
+from devmate.config_writer import set_default_provider
 from devmate.constants import ASSISTANT_NAME
 from devmate.domain.enums import Scope
 from devmate.domain.models import LLMRequest
@@ -39,9 +47,11 @@ app = typer.Typer(
 providers_app = typer.Typer(help="Diagnóstico de providers.")
 hooks_app = typer.Typer(help="Gerencie o hook Git local do DevMate.")
 config_app = typer.Typer(help="Consulte a configuração local.")
+codex_app = typer.Typer(help="Conecte, verifique e desconecte a conta Codex.")
 app.add_typer(providers_app, name="providers")
 app.add_typer(hooks_app, name="hooks")
 app.add_typer(config_app, name="config")
+app.add_typer(codex_app, name="codex")
 console = Console()
 
 
@@ -1028,6 +1038,158 @@ def voice_commands(as_json: Annotated[bool, typer.Option("--json")] = False) -> 
         "\n[dim]Edite a seção voice.commands em .devmate/config.toml e reinicie a Diana "
         "para aplicar alterações.[/dim]"
     )
+
+
+_LOGIN_METHODS: dict[str, LoginMethod] = {
+    "device": "device",
+    "browser": "browser",
+    "api-key": "api_key",
+}
+
+
+def _print_codex_account(account: CodexAccount) -> None:
+    if not account.connected:
+        console.print("Não conectada.")
+        return
+    if account.method == "chatgpt":
+        console.print(f"Conta: {account.email or '(sem e-mail informado)'}")
+        if account.plan:
+            console.print(f"Plano: {account.plan}")
+    elif account.method == "apiKey":
+        console.print("Login via chave de API.")
+    elif account.method == "amazonBedrock":
+        console.print("Login via Amazon Bedrock.")
+    else:
+        console.print(f"Conectada ({account.method or 'método desconhecido'}).")
+
+
+@codex_app.command("status")
+def codex_status(as_json: Annotated[bool, typer.Option("--json")] = False) -> None:
+    """Mostra se há uma conta Codex conectada nesta máquina, sem iniciar login."""
+    service = CodexConnectionService()
+    available, reason = service.available()
+    if not available:
+        if as_json:
+            typer.echo(json.dumps({"connected": False, "reason": reason}, ensure_ascii=False))
+        else:
+            console.print(f"[yellow]{reason}[/yellow]")
+        return
+    account = _run(service.status, as_json)
+    if account is None:
+        return
+    if as_json:
+        typer.echo(
+            json.dumps(
+                {
+                    "connected": account.connected,
+                    "method": account.method,
+                    "email": account.email,
+                    "plan": account.plan,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return
+    _print_codex_account(account)
+
+
+def _offer_codex_as_default(set_default: bool | None) -> None:
+    if set_default is False:
+        return
+    runtime = _run(_runtime)
+    if runtime is None:
+        return
+    if runtime.config.provider.default == "codex":
+        return
+    if set_default is None and not typer.confirm(
+        "\nDefinir codex como provider padrão deste projeto?", default=True
+    ):
+        return
+    config_path = runtime.root / ".devmate" / "config.toml"
+    _run(functools.partial(set_default_provider, config_path, "codex"))
+    console.print("Provider padrão definido como codex.")
+
+
+def _print_full_repo_tip() -> None:
+    console.print(
+        "\nPara respostas com contexto de código (não só documentação), autorize "
+        "explicitamente o escopo:\n"
+        "  devmate talk --provider codex --full-repo\n"
+        '  devmate ask --provider codex --scope code --full-repo "..."'
+    )
+
+
+@codex_app.command("connect")
+def codex_connect(
+    method: Annotated[str, typer.Option("--method", help="device, browser ou api-key.")] = "device",
+    api_key_env: Annotated[
+        str, typer.Option("--api-key-env", help="Variável lida quando --method api-key.")
+    ] = "OPENAI_API_KEY",
+    force: Annotated[
+        bool, typer.Option("--force", help="Refaz o login mesmo se já houver uma conta conectada.")
+    ] = False,
+    set_default: Annotated[
+        bool | None,
+        typer.Option(
+            "--set-default/--no-set-default",
+            help="Define codex como provider padrão sem perguntar.",
+        ),
+    ] = None,
+) -> None:
+    """Conecta esta máquina à sua conta Codex, para que a Diana leia o projeto com sentido."""
+    resolved = _LOGIN_METHODS.get(method)
+    if resolved is None:
+        console.print(
+            f"[red]Erro:[/red] método desconhecido '{method}'. Use device, browser ou api-key."
+        )
+        raise typer.Exit(2)
+
+    service = CodexConnectionService()
+    if not force:
+        # A autenticação do Codex é da máquina; se já houver uma conta válida,
+        # repetir o login pediria uma confirmação desnecessária à pessoa usuária.
+        current = _run(service.status)
+        if current is None:
+            return
+        if current.connected:
+            console.print("[green]Diana já está conectada ao Codex.[/green]")
+            _print_codex_account(current)
+            _print_full_repo_tip()
+            _offer_codex_as_default(set_default)
+            return
+
+    api_key = os.getenv(api_key_env) if resolved == "api_key" else None
+    if resolved == "api_key" and not api_key:
+        console.print(f"[red]Erro:[/red] a variável {api_key_env} não está configurada.")
+        raise typer.Exit(2)
+
+    def prompt(login_prompt: CodexLoginPrompt) -> None:
+        if login_prompt.user_code:
+            console.print(
+                f"Acesse {login_prompt.verification_url} e informe o código "
+                f"[bold]{login_prompt.user_code}[/bold]."
+            )
+        elif login_prompt.verification_url:
+            console.print(f"Abra {login_prompt.verification_url} para concluir o login.")
+        console.print("[dim]Aguardando confirmação...[/dim]")
+
+    account = _run(functools.partial(service.connect, resolved, api_key, prompt))
+    if account is None:
+        return
+    console.print("[green]Diana conectada ao Codex.[/green]")
+    _print_codex_account(account)
+    _print_full_repo_tip()
+    _offer_codex_as_default(set_default)
+
+
+@codex_app.command("disconnect")
+def codex_disconnect() -> None:
+    """Encerra a sessão Codex local desta máquina (equivalente a um logout)."""
+    service = CodexConnectionService()
+    result = _run(service.disconnect)
+    if result is None:
+        return
+    console.print("Sessão Codex encerrada.")
 
 
 @app.command("doctor")
