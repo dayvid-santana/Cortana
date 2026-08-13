@@ -69,6 +69,20 @@ class HotkeyUnavailableError(DevMateError):
     exit_code = 6
 
 
+class AudioPlaybackError(DevMateError):
+    exit_code = 6
+
+
+class UnknownVoiceError(DevMateError):
+    exit_code = 6
+
+
+class SpeechSynthesisError(DevMateError):
+    """Falha ao gerar o áudio: rede, rate limit, timeout ou resposta vazia."""
+
+    exit_code = 6
+
+
 class DaemonAlreadyRunningError(DevMateError):
     exit_code = 8
 

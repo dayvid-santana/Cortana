@@ -4,24 +4,44 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from devmate.adapters.audio.system_player import SystemAudioPlayer
 from devmate.adapters.speech.faster_whisper_provider import FasterWhisperInputProvider
 from devmate.adapters.speech.null_input_provider import NullSpeechInputProvider
 from devmate.adapters.speech.null_provider import NullSpeechProvider
+from devmate.adapters.speech.openai_provider import OpenAISpeechProvider
 from devmate.adapters.speech.system_provider import SystemSpeechProvider
 from devmate.config import AppConfig
 from devmate.domain.ports import SpeechInputProvider, SpeechProvider
 from devmate.errors import ProviderNotFoundError
 
+PREVIEW_CACHE_SUBDIRECTORY = Path("cache") / "voice-previews"
 
-def get_speech_provider(name: str, config: AppConfig) -> SpeechProvider:
-    providers: dict[str, SpeechProvider] = {
-        "null": NullSpeechProvider(),
-        "system": SystemSpeechProvider(config.speech.rate, config.speech.voice),
-    }
-    try:
-        return providers[name]
-    except KeyError as exc:
-        raise ProviderNotFoundError(f"Provider de fala desconhecido: {name}") from exc
+
+def get_speech_provider(
+    name: str,
+    config: AppConfig,
+    root: Path | None = None,
+    voice: str | None = None,
+) -> SpeechProvider:
+    """Constrói o provider de fala; ``voice`` sobrepõe o configurado sem persistir nada."""
+    selected_voice = voice or config.speech.voice
+    if name == "null":
+        return NullSpeechProvider()
+    if name == "system":
+        return SystemSpeechProvider(config.speech.rate, selected_voice)
+    if name == "openai":
+        cache_directory = (root / ".devmate" / PREVIEW_CACHE_SUBDIRECTORY) if root else None
+        return OpenAISpeechProvider(
+            voice=selected_voice,
+            model=config.speech.providers.openai.model,
+            rate=config.speech.rate,
+            style=config.speech.style,
+            api_key_env=config.speech.providers.openai.api_key_env,
+            response_format=config.speech.providers.openai.response_format,
+            cache_directory=cache_directory,
+            player=SystemAudioPlayer(),
+        )
+    raise ProviderNotFoundError(f"Provider de fala desconhecido: {name}")
 
 
 def get_speech_input_provider(

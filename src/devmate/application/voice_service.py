@@ -6,6 +6,7 @@ import re
 import unicodedata
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from typing import Literal
 
 from devmate.application.conversation_service import Answer, ConversationService
 from devmate.application.inspection_conversation_service import InspectionConversationService
@@ -25,6 +26,14 @@ EXIT_PHRASES = frozenset(
         "fim",
         "obrigado tchau",
     }
+)
+
+ASSISTANT_HELP_TEXT = (
+    "Posso responder sobre a documentação indexada do repositório e manter o contexto "
+    "da conversa. Posso analisar arquivos de código quando você os autoriza com --files "
+    "ou --full-repo. Posso narrar arquivos Markdown e seções por comandos de voz "
+    "configurados. Para ver os comandos ativos, use diana commands no terminal. "
+    "Diga sair ou tchau para encerrar a conversa."
 )
 
 
@@ -57,15 +66,22 @@ class VoiceReading:
     result: ReadingResult
 
 
-VoiceTurn = VoiceAnswer | VoiceReading
+@dataclass(frozen=True, slots=True)
+class VoiceHelp:
+    transcript: str
+    text: str = ASSISTANT_HELP_TEXT
+
+
+VoiceTurn = VoiceAnswer | VoiceReading | VoiceHelp
 
 
 @dataclass(frozen=True, slots=True)
-class VoiceReadCommand:
-    """Comando local configurado para narrar um documento Markdown."""
+class VoiceCommand:
+    """Comando local configurado; nunca instrui nem chama uma LLM."""
 
     phrases: tuple[str, ...]
-    path: str
+    action: Literal["read", "help"]
+    path: str | None = None
     section: str | None = None
 
     def matches(self, transcript: str) -> bool:
@@ -83,14 +99,14 @@ class VoiceConversationService:
         conversation: ConversationService,
         inspection_conversation: InspectionConversationService | None = None,
         reading: ReadingService | None = None,
-        read_commands: tuple[VoiceReadCommand, ...] = (),
+        commands: tuple[VoiceCommand, ...] = (),
     ) -> None:
         self.input_provider = input_provider
         self.output_provider = output_provider
         self.conversation = conversation
         self.inspection_conversation = inspection_conversation
         self.reading = reading
-        self.read_commands = read_commands
+        self.commands = commands
 
     def listen_and_ask(
         self,
@@ -104,9 +120,9 @@ class VoiceConversationService:
         full_repo: bool = False,
     ) -> VoiceTurn:
         transcript = self.input_provider.listen(duration_seconds)
-        reading = self._voice_read_command(project_id, transcript, speak_response)
-        if reading is not None:
-            return VoiceReading(transcript=transcript, result=reading)
+        special = self._special_command(project_id, transcript, speak_response)
+        if special is not None:
+            return special
         answer = self._answer(
             project_id, transcript, provider_name, commit_ref, model, code_files, full_repo
         )
@@ -147,9 +163,9 @@ class VoiceConversationService:
             silent_rounds = 0
             if is_exit_phrase(transcript):
                 return
-            reading = self._voice_read_command(project_id, transcript, speak_response)
-            if reading is not None:
-                yield VoiceReading(transcript=transcript, result=reading)
+            special = self._special_command(project_id, transcript, speak_response)
+            if special is not None:
+                yield special
                 continue
             answer = self._answer(
                 project_id, transcript, provider_name, commit_ref, model, code_files, full_repo
@@ -158,20 +174,28 @@ class VoiceConversationService:
                 self._speak(answer.response.text)
             yield VoiceAnswer(transcript=transcript, answer=answer)
 
-    def _voice_read_command(
+    def _special_command(
         self, project_id: int, transcript: str, speak_response: bool
-    ) -> ReadingResult | None:
-        command = next((item for item in self.read_commands if item.matches(transcript)), None)
+    ) -> VoiceReading | VoiceHelp | None:
+        command = next((item for item in self.commands if item.matches(transcript)), None)
         if command is None:
             return None
+        if command.action == "help":
+            help_result = VoiceHelp(transcript)
+            if speak_response:
+                self._speak(help_result.text)
+            return help_result
         if self.reading is None:
             raise RuntimeError("Leitura por voz não está configurada.")
-        return self.reading.read(
+        if command.path is None:
+            raise RuntimeError("O comando de leitura não informa um arquivo Markdown.")
+        reading_result = self.reading.read(
             project_id=project_id,
             requested_path=command.path,
             section=command.section,
             dry_run=not speak_response,
         )
+        return VoiceReading(transcript=transcript, result=reading_result)
 
     def _answer(
         self,

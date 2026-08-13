@@ -19,9 +19,9 @@ from devmate.application.instance_lock import InstanceLock
 from devmate.application.memory_service import MemoryService
 from devmate.application.reading_service import ReadingService
 from devmate.application.scan_service import ScanService
-from devmate.application.voice_service import VoiceConversationService, VoiceReadCommand
+from devmate.application.voice_service import VoiceCommand, VoiceConversationService
 from devmate.config import AppConfig, config_path, database_path, load_config
-from devmate.domain.ports import SpeechInputProvider
+from devmate.domain.ports import SpeechInputProvider, SpeechProvider
 from devmate.errors import ConfigurationError
 from devmate.markdown.narrator import MarkdownNarrator
 
@@ -56,8 +56,17 @@ class Runtime:
     def inspection_service(self) -> InspectionService:
         return InspectionService(self.filesystem, self.context_service(), self.store)
 
-    def reading_service(self) -> ReadingService:
-        speech = get_speech_provider(self.config.speech.provider, self.config)
+    def speech_provider(
+        self, provider_name: str | None = None, voice: str | None = None
+    ) -> SpeechProvider:
+        return get_speech_provider(
+            provider_name or self.config.speech.provider, self.config, self.root, voice
+        )
+
+    def reading_service(
+        self, provider_name: str | None = None, voice: str | None = None
+    ) -> ReadingService:
+        speech = self.speech_provider(provider_name, voice)
         return ReadingService(self.filesystem, self.store, MarkdownNarrator(), speech)
 
     def speech_input(self) -> SpeechInputProvider:
@@ -73,7 +82,7 @@ class Runtime:
     def voice_service(
         self, input_provider: SpeechInputProvider | None = None
     ) -> VoiceConversationService:
-        output = get_speech_provider(self.config.speech.provider, self.config)
+        output = self.speech_provider()
         input_provider = input_provider or self.speech_input()
         conversation = ConversationService(self.store, self.context_service(), self.providers)
         inspection_conversation = InspectionConversationService(
@@ -86,8 +95,9 @@ class Runtime:
             inspection_conversation,
             self.reading_service(),
             tuple(
-                VoiceReadCommand(
+                VoiceCommand(
                     phrases=tuple(command.phrases),
+                    action=command.action,
                     path=command.path,
                     section=command.section,
                 )

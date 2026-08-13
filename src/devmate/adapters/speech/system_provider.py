@@ -8,6 +8,12 @@ import subprocess
 import sys
 from collections.abc import Callable, Sequence
 
+from devmate.domain.speech import (
+    SpeechCapabilities,
+    SpeechRequest,
+    SpeechResult,
+    VoiceInfo,
+)
 from devmate.errors import SpeechProviderUnavailableError
 
 CommandRunner = Callable[[Sequence[str], dict[str, str] | None], str]
@@ -50,6 +56,12 @@ def _default_runner(command: Sequence[str], environment: dict[str, str] | None) 
 
 
 class SystemSpeechProvider:
+    """Narra pelo mecanismo do sistema operacional (SAPI, ``say`` ou ``espeak``).
+
+    Não gera arquivo de áudio: fala diretamente pelo alto-falante, portanto
+    ``synthesize`` não tem o que devolver em ``audio_path``.
+    """
+
     name = "system"
 
     def __init__(
@@ -61,6 +73,16 @@ class SystemSpeechProvider:
         self.rate = rate
         self.voice = voice
         self._runner = runner or _default_runner
+
+    def capabilities(self) -> SpeechCapabilities:
+        return SpeechCapabilities(
+            lists_voices=True,
+            supports_voice_selection=True,
+            supports_instructions=False,
+            supports_rate=True,
+            produces_audio_files=False,
+            remote=False,
+        )
 
     def available(self) -> tuple[bool, str | None]:
         if sys.platform == "win32":
@@ -76,8 +98,8 @@ class SystemSpeechProvider:
             return max(-10, round((self.rate - 180) / 10))
         return min(10, round((self.rate - 180) / 27))
 
-    def list_voices(self) -> list[str]:
-        """Enumera as vozes instaladas no sistema operacional."""
+    def raw_voice_descriptions(self) -> list[str]:
+        """Enumera as vozes instaladas no sistema operacional, como o SO as nomeia."""
         available, reason = self.available()
         if not available:
             raise SpeechProviderUnavailableError(reason or "Provider de fala indisponível.")
@@ -96,30 +118,47 @@ class SystemSpeechProvider:
             raise SpeechProviderUnavailableError(f"Falha ao listar vozes: {exc}") from exc
         return [line.strip() for line in output.splitlines() if line.strip()]
 
-    def _speak_command(self, text: str) -> tuple[list[str], dict[str, str] | None]:
+    def list_voices(self) -> list[VoiceInfo]:
+        return [
+            VoiceInfo(id=description, name=description, provider=self.name)
+            for description in self.raw_voice_descriptions()
+        ]
+
+    def _speak_command(
+        self, text: str, voice: str | None
+    ) -> tuple[list[str], dict[str, str] | None]:
         if sys.platform == "win32":
             environment = os.environ.copy()
             environment[TEXT_VARIABLE] = text
-            environment[VOICE_VARIABLE] = self.voice or ""
+            environment[VOICE_VARIABLE] = voice or ""
             environment[RATE_VARIABLE] = str(self.sapi_rate())
             command = ["powershell", "-NoProfile", "-NonInteractive", "-Command", _SPEAK_SCRIPT]
             return command, environment
         if sys.platform == "darwin":
             command = ["say", "-r", str(self.rate)]
-            if self.voice:
-                command += ["-v", self.voice]
+            if voice:
+                command += ["-v", voice]
             return [*command, text], None
         command = ["espeak", "-s", str(self.rate)]
-        if self.voice:
-            command += ["-v", self.voice]
+        if voice:
+            command += ["-v", voice]
         return [*command, text], None
 
     def speak(self, text: str) -> None:
+        self.synthesize(SpeechRequest(text=text, voice=self.voice, rate=self.rate))
+
+    def synthesize(self, request: SpeechRequest) -> SpeechResult:
         available, reason = self.available()
         if not available:
             raise SpeechProviderUnavailableError(reason or "Provider de fala indisponível.")
-        command, environment = self._speak_command(text)
+        voice = request.voice or self.voice
+        command, environment = self._speak_command(request.text, voice)
         try:
             self._runner(command, environment)
         except (OSError, subprocess.SubprocessError) as exc:
             raise SpeechProviderUnavailableError(f"Falha ao narrar localmente: {exc}") from exc
+        return SpeechResult(provider=self.name, voice=voice, audio_path=None)
+
+    def stop(self) -> None:
+        """Não há processo de fala rastreado para interromper de forma segura."""
+        return None

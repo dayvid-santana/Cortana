@@ -47,4 +47,37 @@ def doctor(runtime: Runtime) -> list[Check]:
     voice_input = runtime.voice_service().input_provider
     available, detail = voice_input.available()
     checks.append(Check(f"Entrada de voz {voice_input.name}", available, detail or "disponível"))
+    checks.extend(_speech_checks(runtime))
+    return checks
+
+
+def _speech_checks(runtime: Runtime) -> list[Check]:
+    """Seção dedicada de fala: provider, modelo, voz, credencial e reprodução.
+
+    Nunca inclui o valor da credencial — só se a variável de ambiente está presente.
+    """
+    config = runtime.config.speech
+    speech = runtime.reading_service().speech
+    capabilities = speech.capabilities()
+    checks = [
+        Check("Speech provider", True, config.provider),
+        Check("Speech voice", config.voice is not None, config.voice or "(padrão do provider)"),
+    ]
+    if capabilities.remote:
+        api_key_configured = getattr(speech, "api_key_configured", lambda: False)()
+        model_name = f"Speech model ({config.provider})"
+        checks.append(Check(model_name, True, config.providers.openai.model))
+        key_detail = "configured" if api_key_configured else "missing"
+        checks.append(Check("Speech API key", api_key_configured, key_detail))
+        player = getattr(speech, "player", None)
+        if player is not None:
+            player_available, player_detail = player.available()
+            checks.append(Check("Audio player", player_available, player_detail or "available"))
+        checks.append(
+            Check(
+                "Preview cache",
+                runtime.root.joinpath(".devmate").is_dir(),
+                "available",
+            )
+        )
     return checks

@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import json
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
@@ -16,14 +17,14 @@ from rich.table import Table
 
 from devmate import __version__
 from devmate.adapters.hotkey.windows_hotkey import WindowsHotkey
-from devmate.adapters.speech.system_provider import SystemSpeechProvider
+from devmate.application import voices_service
 from devmate.application.conversation_service import ConversationService
 from devmate.application.daemon_service import DaemonService
 from devmate.application.doctor_service import doctor
 from devmate.application.hooks_service import hook_installed, install_hook, uninstall_hook
 from devmate.application.inspection_service import InspectionContext
 from devmate.application.project_service import initialize_project
-from devmate.application.voice_service import VoiceReading
+from devmate.application.voice_service import VoiceHelp, VoiceReading
 from devmate.bootstrap import Runtime, load_runtime
 from devmate.constants import ASSISTANT_NAME
 from devmate.domain.enums import Scope
@@ -346,7 +347,14 @@ def listen(
     )
     if result is None:
         return
-    if isinstance(result, VoiceReading):
+    data: dict[str, Any]
+    if isinstance(result, VoiceHelp):
+        data = {
+            "transcript": result.transcript,
+            "action": "help",
+            "answer": result.text,
+        }
+    elif isinstance(result, VoiceReading):
         data = {
             "transcript": result.transcript,
             "action": "read",
@@ -363,6 +371,9 @@ def listen(
         typer.echo(json.dumps(data, ensure_ascii=False))
         return
     console.print(f"[bold]Você:[/bold] {result.transcript}\n")
+    if isinstance(result, VoiceHelp):
+        console.print(f"[bold]{ASSISTANT_NAME}:[/bold] {result.text}")
+        return
     if isinstance(result, VoiceReading):
         console.print(
             f"[bold]{ASSISTANT_NAME}:[/bold] Leitura local de {result.result.path} concluída."
@@ -433,6 +444,9 @@ def talk(
             if turn is None:
                 break
             console.print(f"[bold]Você:[/bold] {turn.transcript}")
+            if isinstance(turn, VoiceHelp):
+                console.print(f"[bold]{ASSISTANT_NAME}:[/bold] {turn.text}\n")
+                continue
             if isinstance(turn, VoiceReading):
                 console.print(
                     f"[bold]{ASSISTANT_NAME}:[/bold] Leitura local de "
@@ -505,6 +519,9 @@ def daemon(
                 if answer is None:
                     continue
                 console.print(f"[bold]Você:[/bold] {answer.transcript}")
+                if isinstance(answer, VoiceHelp):
+                    console.print(f"[bold]{ASSISTANT_NAME}:[/bold] {answer.text}\n")
+                    continue
                 if isinstance(answer, VoiceReading):
                     console.print(
                         f"[bold]{ASSISTANT_NAME}:[/bold] Leitura local de "
@@ -578,13 +595,22 @@ def read_document(
     section: Annotated[str | None, typer.Option("--section")] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
     resume: Annotated[bool, typer.Option("--resume")] = False,
+    voice: Annotated[
+        str | None,
+        typer.Option("--voice", help="Sobrepõe a voz apenas nesta execução; não persiste."),
+    ] = None,
+    speech_provider: Annotated[
+        str | None, typer.Option("--speech-provider", help="Sobrepõe o provider de fala.")
+    ] = None,
 ) -> None:
     """Narra um Markdown local ou mostra os segmentos em modo dry-run."""
     runtime = _run(_runtime)
     if runtime is None:
         return
     result = _run(
-        lambda: runtime.reading_service().read(runtime.project_id, path, section, dry_run, resume)
+        lambda: runtime.reading_service(speech_provider, voice).read(
+            runtime.project_id, path, section, dry_run, resume
+        )
     )
     if result is None:
         return
@@ -722,45 +748,251 @@ def providers_doctor(name: str) -> None:
     )
 
 
-@app.command()
-def voices(
-    test: Annotated[
-        bool, typer.Option("--test", help="Narra uma frase com cada voz encontrada.")
-    ] = False,
-    say: Annotated[str | None, typer.Option("--say", help="Frase usada com --test.")] = None,
+voices_app = typer.Typer(help="Liste, compare e escolha a voz de narração.")
+app.add_typer(voices_app, name="voices")
+
+
+def _voice_provider_and_list(
+    runtime: Runtime, provider_name: str | None
+) -> tuple[str, Any, list[Any]]:
+    name = provider_name or runtime.config.speech.provider
+    provider = runtime.speech_provider(name)
+    return name, provider, provider.list_voices()
+
+
+@voices_app.command("list")
+def voices_list(
+    provider: Annotated[
+        str | None, typer.Option("--provider", help="system, openai ou null.")
+    ] = None,
     as_json: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Lista as vozes do sistema disponíveis para a narração."""
+    """Lista as vozes que o provider selecionado consegue descobrir."""
     runtime = _run(_runtime, as_json)
     if runtime is None:
         return
-    provider = SystemSpeechProvider(runtime.config.speech.rate, runtime.config.speech.voice)
-    found = _run(provider.list_voices, as_json)
-    if found is None:
+    result = _run(lambda: _voice_provider_and_list(runtime, provider), as_json)
+    if result is None:
         return
+    name, _speech, found = result
+    selected = runtime.config.speech.voice
     if as_json:
-        typer.echo(json.dumps({"voices": found, "selected": provider.voice}, ensure_ascii=False))
+        typer.echo(
+            json.dumps(
+                {
+                    "provider": name,
+                    "selected": selected,
+                    "voices": [
+                        {
+                            "id": voice.id,
+                            "provider": voice.provider,
+                            "selected": voice.id == selected,
+                            "preview_supported": voice.preview_supported,
+                        }
+                        for voice in found
+                    ],
+                },
+                ensure_ascii=False,
+            )
+        )
         return
-    table = Table(title="Vozes do sistema")
-    table.add_column("Voz")
-    table.add_column("Em uso")
-    for name in found:
-        selected = provider.voice is not None and provider.voice.casefold() in name.casefold()
-        table.add_row(name, "sim" if selected else "")
+    if not found:
+        console.print(f"[yellow]O provider '{name}' não expôs nenhuma voz.[/yellow]")
+        return
+    table = Table(title=f"{name.capitalize()} voices")
+    table.add_column("Voice")
+    table.add_column("Provider")
+    table.add_column("Selected")
+    table.add_column("Description")
+    for voice in found:
+        is_selected = "✓" if voice.id == selected else ""
+        table.add_row(voice.id, voice.provider, is_selected, voice.description or "")
     console.print(table)
-    if provider.voice is None:
-        console.print("\n[dim]Nenhuma voz fixada; a padrão do sistema é usada.[/dim]")
-    console.print(
-        "\nPara escolher, use um trecho do nome em `.devmate/config.toml`:\n"
-        '  [speech]\n  voice = "Maria"'
-    )
-    if not test:
+    console.print(f"\nCurrent voice: {selected or '(padrão do provider)'}")
+
+
+@voices_app.command("current")
+def voices_current(as_json: Annotated[bool, typer.Option("--json")] = False) -> None:
+    """Mostra o provider, a voz, o modelo e o ritmo configurados."""
+    runtime = _run(_runtime, as_json)
+    if runtime is None:
         return
-    phrase = say or f"Olá, eu sou a {ASSISTANT_NAME}."
-    for name in found:
-        console.print(f"[cyan]Narrando com:[/cyan] {name}")
-        sample = SystemSpeechProvider(runtime.config.speech.rate, name)
-        _run(functools.partial(sample.speak, phrase))
+    current = voices_service.current_voice(runtime.config)
+    if as_json:
+        typer.echo(
+            json.dumps(
+                {
+                    "provider": current.provider,
+                    "voice": current.voice,
+                    "model": current.model,
+                    "language": current.language,
+                    "rate": current.rate,
+                    "style": current.style,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return
+    console.print(f"Speech provider: {current.provider}")
+    console.print(f"Voice: {current.voice or '(padrão do provider)'}")
+    if current.model:
+        console.print(f"Model: {current.model}")
+    console.print(f"Language: {current.language}")
+    console.print(f"Rate: {current.rate}")
+    if current.style:
+        console.print(f"Style: {current.style}")
+
+
+@voices_app.command("set")
+def voices_set(
+    voice: str,
+    provider: Annotated[
+        str | None, typer.Option("--provider", help="Também grava [speech].provider.")
+    ] = None,
+    project: Annotated[
+        bool, typer.Option("--project", help="Escopo do projeto (único disponível hoje).")
+    ] = True,
+    global_scope: Annotated[
+        bool,
+        typer.Option(
+            "--global", help="Ainda não suportado; ver docs/voice-usage.md#escopos-de-voz."
+        ),
+    ] = False,
+) -> None:
+    """Define a voz padrão em `.devmate/config.toml`, preservando o resto do arquivo."""
+    del project
+    if global_scope:
+        console.print(
+            "[yellow]--global ainda não é suportado.[/yellow] "
+            "Hoje só existe configuração por projeto; "
+            "veja docs/voice-usage.md#escopos-de-voz para o plano de evolução."
+        )
+        raise typer.Exit(2)
+    runtime = _run(_runtime)
+    if runtime is None:
+        return
+    target_provider = provider or runtime.config.speech.provider
+    _run(
+        lambda: voices_service.persist_voice(
+            runtime.root / ".devmate" / "config.toml", target_provider, voice, provider is not None
+        )
+    )
+    console.print(f"Voice '{voice}' definida como voz padrão do projeto.")
+
+
+@voices_app.command("preview")
+def voices_preview(
+    voice: Annotated[str | None, typer.Argument()] = None,
+    all_voices: Annotated[bool, typer.Option("--all", help="Compara todas as vozes.")] = False,
+    text: Annotated[str | None, typer.Option("--text", help="Frase personalizada.")] = None,
+    file: Annotated[
+        str | None, typer.Option("--file", help="Lê a frase de um Markdown do repositório.")
+    ] = None,
+    provider: Annotated[str | None, typer.Option("--provider")] = None,
+    pause_between: Annotated[
+        float, typer.Option("--pause-between", help="Segundos entre uma voz e a próxima.")
+    ] = 1.0,
+    yes: Annotated[bool, typer.Option("--yes", help="Não pede confirmação de custo.")] = False,
+) -> None:
+    """Gera e reproduz uma amostra por voz, uma de cada vez."""
+    if voice is None and not all_voices:
+        console.print("[red]Erro:[/red] informe uma voz ou use --all.")
+        raise typer.Exit(2)
+    runtime = _run(_runtime)
+    if runtime is None:
+        return
+    provider_name = provider or runtime.config.speech.provider
+    speech = runtime.speech_provider(provider_name)
+    known = _run(speech.list_voices)
+    if known is None:
+        return
+    targets = _run(lambda: voices_service.resolve_voice_target(voice or "", all_voices, known))
+    if targets is None:
+        return
+
+    phrase = text
+    if file is not None:
+        _, content, _ = runtime.filesystem.read_text(file)
+        phrase = content
+
+    openai_model = runtime.config.speech.providers.openai.model
+    plans = voices_service.build_preview_plan(
+        speech, targets, phrase, runtime.config.speech.rate, openai_model
+    )
+    pending = voices_service.uncached_count(plans)
+    capabilities = speech.capabilities()
+    if capabilities.remote and pending and not yes:
+        console.print(
+            f"{pending} amostra(s) serão geradas usando o provider {provider_name}.\n"
+            "Isso realizará chamadas à API.\n"
+        )
+        if not typer.confirm("Continuar?", default=True):
+            raise typer.Exit(0)
+
+    total = len(plans)
+    for index, plan in enumerate(plans, start=1):
+        console.print(f"Voice {index}/{total}: {plan.voice.id}")
+        _synthesize_and_play(speech, plan.request)
+        if index < total and pause_between > 0:
+            time.sleep(pause_between)
+        console.print()
+
+
+def _synthesize_and_play(speech: Any, request: Any) -> None:
+    outcome = _run(functools.partial(speech.synthesize, request))
+    if outcome is None:
+        return
+    console.print("Playing..." if not outcome.cached else "Playing (cache)...")
+    player = getattr(speech, "player", None)
+    if outcome.audio_path is not None and player is not None:
+        _run(functools.partial(player.play, outcome.audio_path))
+
+
+@voices_app.command("choose")
+def voices_choose(
+    provider: Annotated[str | None, typer.Option("--provider")] = None,
+) -> None:
+    """Fluxo interativo: listar, ouvir uma prévia e confirmar a escolha."""
+    runtime = _run(_runtime)
+    if runtime is None:
+        return
+    provider_name = provider or runtime.config.speech.provider
+    speech = runtime.speech_provider(provider_name)
+    known = _run(speech.list_voices)
+    if known is None or not known:
+        console.print(f"[yellow]O provider '{provider_name}' não expôs nenhuma voz.[/yellow]")
+        return
+    console.print(f"Escolha uma voz {provider_name.capitalize()}\n")
+    for index, info in enumerate(known, start=1):
+        console.print(f"[{index}] {info.id}")
+    console.print()
+    choice = typer.prompt("Digite o número da voz", type=int, default=0, show_default=False)
+    if choice < 1 or choice > len(known):
+        console.print("[red]Número inválido.[/red]")
+        raise typer.Exit(2)
+    selected = known[choice - 1]
+    console.print(f"\nVoice: {selected.id}\n")
+    while True:
+        prompt = "[P] Preview  [S] Select  [B] Back  [Q] Quit"
+        action = typer.prompt(prompt, default="s").strip().casefold()
+        if action == "p":
+            plans = voices_service.build_preview_plan(
+                speech, [selected], None, runtime.config.speech.rate, None
+            )
+            _synthesize_and_play(speech, plans[0].request)
+            continue
+        if action == "b":
+            voices_choose(provider=provider)
+            return
+        if action == "q":
+            return
+        _run(
+            lambda: voices_service.persist_voice(
+                runtime.root / ".devmate" / "config.toml", provider_name, selected.id, False
+            )
+        )
+        console.print(f"Voice '{selected.id}' definida como voz padrão do projeto.")
+        return
 
 
 @app.command("commands")
@@ -787,7 +1019,7 @@ def voice_commands(as_json: Annotated[bool, typer.Option("--json")] = False) -> 
     table.add_column("Ação")
     table.add_column("Destino")
     for command in commands:
-        destination = command.path
+        destination = command.path or "orientação local"
         if command.section:
             destination = f"{destination} — {command.section}"
         table.add_row(", ".join(command.phrases), command.action, destination)

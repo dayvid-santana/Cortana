@@ -82,7 +82,15 @@ Fale **"Diana, leia a arquitetura"** ou **"Diana, leia a segurança"**. Depois d
 diana commands
 ```
 
-Nesta versão, os comandos configuráveis executam somente a ação segura `read` e aceitam apenas arquivos Markdown (`.md`). Perguntas livres continuam seguindo para o provider selecionado.
+Também existe o comando local de ajuda. Diga **"Diana, o que você pode fazer?"** ou **"Diana, ajuda"** para ouvir as capacidades e limites principais, sem chamar o provider. A configuração padrão é:
+
+```toml
+[[voice.commands]]
+phrases = ["o que você pode fazer", "ajuda"]
+action = "help"
+```
+
+Nesta versão, os comandos configuráveis aceitam as ações seguras `read`, que lê apenas arquivos Markdown (`.md`), e `help`, que não recebe arquivo. Perguntas livres continuam seguindo para o provider selecionado.
 
 ## Providers de resposta
 
@@ -126,6 +134,54 @@ input_duration_seconds = 10
 
 Modelos menores iniciam mais rapidamente; `base` é o equilíbrio padrão para português em CPU. A opção `--duration` substitui `input_duration_seconds` em uma única execução.
 
+### Vozes da OpenAI
+
+Além da narração local do sistema, a Diana pode narrar com as vozes da OpenAI. É um `SpeechProvider` como outro qualquer — troque `speech.provider` para `openai` e defina uma voz:
+
+```toml
+[speech]
+provider = "openai"
+voice = "marin"
+# style = "technical_calm"   # só tem efeito em modelos com suporte a instruções
+
+[speech.providers.openai]
+model = "gpt-4o-mini-tts"
+api_key_env = "OPENAI_API_KEY"
+response_format = "mp3"
+```
+
+A credencial nunca vai para o TOML: `api_key_env` só guarda o *nome* da variável de ambiente a ler (`OPENAI_API_KEY` por padrão).
+
+```powershell
+$env:OPENAI_API_KEY = "..."
+devmate voices list --provider openai
+devmate voices preview marin
+devmate voices preview --all --pause-between 1.5
+devmate voices set marin
+devmate voices current
+```
+
+`devmate voices preview --all` gera e reproduz uma amostra por vez — nunca em paralelo — para você conseguir comparar sem se perder. Amostras já geradas ficam em cache local (`.devmate/cache/voice-previews/`) pela combinação de provider, modelo, voz, texto e ritmo; repetir o mesmo `preview` não gera uma nova chamada à API. Como cada síntese é uma chamada paga, `devmate voices preview --all` avisa quantas amostras vão ser geradas antes de prosseguir — a menos que já estejam em cache ou você use `--yes`.
+
+Para escolher interativamente, ouvindo antes de confirmar:
+
+```powershell
+devmate voices choose
+```
+
+Quando `speech.provider = "openai"`, a síntese acontece na API e o resultado é um arquivo de áudio reproduzido localmente. As vozes do Windows (SAPI) não participam desse fluxo — mesmo em uma máquina sem nenhuma voz TTS instalada, a narração funciona, pois quem gera o áudio é a OpenAI e quem toca é apenas um player de arquivo.
+
+Para uma execução avulsa sem alterar a voz configurada:
+
+```powershell
+devmate read docs/architecture.md --voice cedar
+devmate read README.md --speech-provider openai --voice marin
+```
+
+#### Escopos de voz
+
+Hoje `devmate voices set` grava sempre no projeto atual (`.devmate/config.toml`), o comportamento de `--project`. Um escopo `--global`, para uma preferência de voz compartilhada entre projetos, ainda não existe — é um candidato natural para uma `platformdirs.user_config_dir()` própria da Diana, análoga ao `.devmate` do projeto, e fica registrado aqui como evolução futura.
+
 ### Comportamento do Codex
 
 O arquivo `.devmate/config.toml` contém a instrução de sistema do provider Codex. Ela é usada como orientação confiável para deixar a resposta técnica, natural e apropriada para narração:
@@ -151,3 +207,6 @@ Não coloque chaves de API, tokens ou informações pessoais nesse campo. A conf
 | Erro ao baixar o modelo | Conecte-se à internet apenas para a primeira execução ou copie um modelo já baixado para `.devmate/models`. |
 | Resposta não é narrada | Execute `devmate doctor` e confirme que `Fala system` está disponível. |
 | Uso no Docker | Execute a conversa de voz no host. O contêiner não tem acesso confiável ao microfone nem ao áudio do Windows. |
+| `OPENAI_API_KEY não está configurada` | Defina a variável de ambiente (`$env:OPENAI_API_KEY` no PowerShell) antes de usar `speech.provider = "openai"`. |
+| `Voz OpenAI desconhecida` | Rode `devmate voices list --provider openai` para ver os ids aceitos; a validação é local e não gasta uma chamada à API. |
+| Prévia não reproduz som | Confirme a seção `Speech` de `devmate doctor`: `Audio player` precisa estar `available`. No Windows isso depende do PowerShell; em Linux, de `paplay`, `aplay`, `ffplay` ou `mpv`. |

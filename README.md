@@ -91,11 +91,46 @@ Para uma conversa contínua, `talk` mantém a Diana escutando entre as rodadas e
 devmate talk --provider mock
 ```
 
-Durante a conversa, diga **"Diana, leia o documento"** para narrar `README.md` localmente, sem chamar o provider de linguagem. Você pode acrescentar outros comandos de leitura em `[[voice.commands]]` no `.devmate/config.toml` e consultá-los com `diana commands`.
+Durante a conversa, diga **"Diana, leia o documento"** para narrar `README.md` localmente, ou **"Diana, o que você pode fazer?"** para ouvir as capacidades principais. Nenhum dos dois chama o provider de linguagem. Você pode acrescentar outros comandos em `[[voice.commands]]` no `.devmate/config.toml` e consultá-los com `diana commands`.
 
 No primeiro uso, o modelo configurado (`base`) é baixado para `.devmate/models`; depois, a captura e a transcrição permanecem locais e o áudio não é salvo. Para mudar a janela de captura, use `--duration 15`. `--no-speak` mantém a transcrição e a resposta no terminal sem reproduzir áudio. Se for usado um provider remoto, somente a pergunta já transcrita — nunca a gravação — é enviada ao provider.
 
 Consulte o [guia de conversa por voz](docs/voice-usage.md) para a preparação no Windows e solução de problemas.
+
+## Escolhendo uma voz
+
+Por padrão a Diana narra com o mecanismo do sistema operacional (`speech.provider = "system"`). Para usar as vozes remotas da OpenAI:
+
+```bash
+export OPENAI_API_KEY="..."
+
+devmate voices list --provider openai
+devmate voices preview marin
+devmate voices preview cedar
+devmate voices set marin
+devmate read docs/architecture.md
+```
+
+No Windows PowerShell:
+
+```powershell
+$env:OPENAI_API_KEY = "..."
+```
+
+`devmate voices set marin` grava `[speech].voice` em `.devmate/config.toml` preservando o resto do arquivo. Depois disso, `devmate read` e `devmate talk` usam `marin` automaticamente. Para uma execução avulsa sem alterar a configuração:
+
+```bash
+devmate read docs/architecture.md --voice cedar
+```
+
+Para comparar todas as vozes de um provider antes de escolher:
+
+```bash
+devmate voices preview --all
+devmate voices choose
+```
+
+Quando `speech.provider = "openai"`, a síntese acontece inteiramente na API da OpenAI e o áudio resultante é apenas reproduzido localmente — as vozes instaladas no Windows não participam da narração nesse modo. `devmate voices current` mostra o provider, a voz, o modelo e o ritmo em uso; `devmate doctor` inclui uma seção de fala com o status da credencial (nunca o valor) e do player de áudio.
 
 ## Segurança
 

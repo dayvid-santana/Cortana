@@ -7,6 +7,12 @@ from pathlib import Path
 from typing import Protocol
 
 from devmate.domain.models import CommitRecord, LLMRequest, LLMResponse
+from devmate.domain.speech import (
+    SpeechCapabilities,
+    SpeechRequest,
+    SpeechResult,
+    VoiceInfo,
+)
 
 
 class GitPort(Protocol):
@@ -28,11 +34,31 @@ class LanguageModelProvider(Protocol):
 
 
 class SpeechProvider(Protocol):
+    """Contrato de síntese de fala, comum a providers locais e remotos."""
+
     name: str
 
     def available(self) -> tuple[bool, str | None]: ...
 
+    def capabilities(self) -> SpeechCapabilities: ...
+
+    def list_voices(self) -> list[VoiceInfo]: ...
+
     def speak(self, text: str) -> None: ...
+
+    def synthesize(self, request: SpeechRequest) -> SpeechResult: ...
+
+    def stop(self) -> None: ...
+
+
+class AudioPlayerPort(Protocol):
+    """Reprodução de um arquivo já sintetizado, separada da geração."""
+
+    name: str
+
+    def available(self) -> tuple[bool, str | None]: ...
+
+    def play(self, path: Path) -> None: ...
 
 
 class SpeechInputProvider(Protocol):

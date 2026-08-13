@@ -55,3 +55,13 @@ def test_voice_commands_reject_non_markdown_targets() -> None:
         AppConfig.model_validate(
             {"voice": {"commands": [{"phrases": ["leia o código"], "path": "src/app.py"}]}}
         )
+
+
+def test_voice_help_command_needs_no_document_path() -> None:
+    config = AppConfig.model_validate(
+        {"voice": {"commands": [{"phrases": ["o que você pode fazer"], "action": "help"}]}}
+    )
+
+    command = config.voice.commands[0]
+    assert command.action == "help"
+    assert command.path is None

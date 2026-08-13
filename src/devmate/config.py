@@ -5,9 +5,9 @@ from __future__ import annotations
 import os
 import tomllib
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from devmate.constants import (
     ASSISTANT_NAME,
@@ -77,11 +77,28 @@ class SecurityConfig(BaseModel):
     )
 
 
+class OpenAISpeechProviderConfig(BaseModel):
+    """Comportamento do provider de fala remoto; nunca guarda a credencial."""
+
+    model: str = "gpt-4o-mini-tts"
+    api_key_env: str = Field(default="OPENAI_API_KEY", min_length=1)
+    response_format: Literal["mp3", "opus", "aac", "flac", "wav", "pcm"] = "mp3"
+
+
+class SpeechProvidersConfig(BaseModel):
+    openai: OpenAISpeechProviderConfig = Field(default_factory=OpenAISpeechProviderConfig)
+
+
 class SpeechConfig(BaseModel):
     provider: str = DEFAULT_SPEECH_PROVIDER
     rate: int = Field(default=180, ge=80, le=450)
-    # Trecho do nome da voz do sistema; vazio mantém a voz padrão do SO.
+    # Para "system", um trecho do nome da voz local. Para "openai", o id da voz
+    # (ex.: "marin"). Vazio mantém a voz padrão do provider selecionado.
     voice: str | None = None
+    # Preset de estilo (ex.: "technical_calm"); só tem efeito em modelos que
+    # suportam instruções de leitura. Providers sem suporte o ignoram.
+    style: str | None = None
+    providers: SpeechProvidersConfig = Field(default_factory=SpeechProvidersConfig)
     input_provider: str = "faster_whisper"
     input_model: str = "base"
     input_language: str = "pt-BR"
@@ -89,11 +106,11 @@ class SpeechConfig(BaseModel):
 
 
 class VoiceCommandConfig(BaseModel):
-    """Ordem local de voz para narrar um Markdown autorizado."""
+    """Ordem local de voz que não precisa consultar um provider de linguagem."""
 
     phrases: list[str] = Field(min_length=1)
-    action: Literal["read"] = "read"
-    path: str = Field(min_length=1)
+    action: Literal["read", "help"] = "read"
+    path: str | None = None
     section: str | None = None
 
     @field_validator("phrases")
@@ -105,10 +122,20 @@ class VoiceCommandConfig(BaseModel):
 
     @field_validator("path")
     @classmethod
-    def validate_markdown_path(cls, path: str) -> str:
+    def validate_markdown_path(cls, path: str | None) -> str | None:
+        if path is None:
+            return None
         if not path.casefold().endswith(".md"):
             raise ValueError("Comandos de leitura por voz aceitam apenas arquivos Markdown (.md).")
         return path
+
+    @model_validator(mode="after")
+    def validate_action_arguments(self) -> Self:
+        if self.action == "read" and self.path is None:
+            raise ValueError("A ação read exige o caminho de um arquivo Markdown.")
+        if self.action == "help" and (self.path is not None or self.section is not None):
+            raise ValueError("A ação help não aceita path nem section.")
+        return self
 
 
 def _default_voice_commands() -> list[VoiceCommandConfig]:
@@ -116,7 +143,11 @@ def _default_voice_commands() -> list[VoiceCommandConfig]:
         VoiceCommandConfig(
             phrases=["leia o documento", "ler o documento"],
             path="README.md",
-        )
+        ),
+        VoiceCommandConfig(
+            phrases=["o que você pode fazer", "o que voce pode fazer", "ajuda"],
+            action="help",
+        ),
     ]
 
 
@@ -178,18 +209,28 @@ DEFAULT_CONFIG_TOML = (
     "[speech]\n"
     'provider = "system"\n'
     "rate = 180\n"
-    '# Use `devmate voices` para listar. Um trecho basta, ex.: "Maria".\n'
-    '# voice = "Maria"\n\n'
+    '# Para provider = "system", um trecho do nome (ex.: "Maria").\n'
+    '# Para provider = "openai", o id da voz (ex.: "marin"). Use `devmate voices list`.\n'
+    '# voice = "marin"\n'
+    '# style = "technical_calm"\n\n'
+    "[speech.providers.openai]\n"
+    'model = "gpt-4o-mini-tts"\n'
+    "# Nome da variável de ambiente com a credencial; a chave nunca fica aqui.\n"
+    'api_key_env = "OPENAI_API_KEY"\n'
+    'response_format = "mp3"\n\n'
     'input_provider = "faster_whisper"\n'
     'input_model = "base"\n'
     'input_language = "pt-BR"\n'
     "input_duration_seconds = 10\n\n"
-    "# Acrescente novos blocos para criar comandos de voz locais de leitura.\n"
+    "# Acrescente novos blocos para criar comandos de voz locais.\n"
     "[[voice.commands]]\n"
     'phrases = ["leia o documento", "ler o documento"]\n'
     'action = "read"\n'
     'path = "README.md"\n'
     '# section = "Segurança"\n\n'
+    "[[voice.commands]]\n"
+    'phrases = ["o que você pode fazer", "ajuda"]\n'
+    'action = "help"\n\n'
     "[daemon]\n"
     'hotkey = "ctrl+alt+d"\n'
     "preload_model = true\n\n"

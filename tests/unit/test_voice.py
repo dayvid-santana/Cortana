@@ -8,8 +8,9 @@ from devmate.adapters.speech.faster_whisper_provider import FasterWhisperInputPr
 from devmate.application.conversation_service import Answer, load_history
 from devmate.application.reading_service import ReadingResult
 from devmate.application.voice_service import (
+    VoiceCommand,
     VoiceConversationService,
-    VoiceReadCommand,
+    VoiceHelp,
     VoiceReading,
     is_exit_phrase,
 )
@@ -241,13 +242,13 @@ def test_regular_questions_are_not_treated_as_exit(phrase: str) -> None:
 
 @pytest.mark.parametrize("phrase", ["leia o documento", "Diana, leia o documento."])
 def test_voice_read_command_recognizes_configured_phrases(phrase: str) -> None:
-    command = VoiceReadCommand(("leia o documento", "ler o documento"), "README.md")
+    command = VoiceCommand(("leia o documento", "ler o documento"), "read", "README.md")
 
     assert command.matches(phrase)
 
 
 def test_voice_read_command_does_not_match_unconfigured_phrase() -> None:
-    command = VoiceReadCommand(("leia o documento",), "README.md")
+    command = VoiceCommand(("leia o documento",), "read", "README.md")
 
     assert not command.matches("Diana, leia o README")
 
@@ -261,7 +262,7 @@ def test_readme_voice_command_uses_local_reader_without_calling_provider() -> No
         output,
         conversation,  # type: ignore[arg-type]
         reading=reader,  # type: ignore[arg-type]
-        read_commands=(VoiceReadCommand(("leia o documento",), "README.md"),),
+        commands=(VoiceCommand(("leia o documento",), "read", "README.md"),),
     )
 
     result = service.listen_and_ask(1, "codex", duration_seconds=4)
@@ -282,9 +283,10 @@ def test_custom_voice_command_reads_its_configured_document_section() -> None:
         output,
         conversation,  # type: ignore[arg-type]
         reading=reader,  # type: ignore[arg-type]
-        read_commands=(
-            VoiceReadCommand(
+        commands=(
+            VoiceCommand(
                 ("leia a arquitetura",),
+                "read",
                 "docs/architecture.md",
                 "Segurança",
             ),
@@ -296,6 +298,24 @@ def test_custom_voice_command_reads_its_configured_document_section() -> None:
     assert isinstance(result, VoiceReading)
     assert reader.arguments == (1, "docs/architecture.md", "Segurança", False)
     assert conversation.questions == []
+
+
+def test_help_voice_command_speaks_capabilities_without_calling_provider() -> None:
+    output = FakeSpeech()
+    conversation = RecordingConversation()
+    service = VoiceConversationService(
+        ScriptedInput(["Diana, o que você pode fazer?"]),  # type: ignore[arg-type]
+        output,
+        conversation,  # type: ignore[arg-type]
+        commands=(VoiceCommand(("o que você pode fazer",), "help"),),
+    )
+
+    result = service.listen_and_ask(1, "codex")
+
+    assert isinstance(result, VoiceHelp)
+    assert "documentação indexada" in result.text
+    assert conversation.questions == []
+    assert output.spoken == [result.text]
 
 
 def test_converse_runs_successive_rounds_until_the_exit_phrase() -> None:

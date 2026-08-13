@@ -68,18 +68,29 @@ def test_speak_without_a_configured_voice_keeps_the_system_default() -> None:
 
 
 @windows_only
-def test_list_voices_returns_one_entry_per_line() -> None:
+def test_raw_voice_descriptions_returns_one_entry_per_line() -> None:
     runner = RecordingRunner(
         output="Microsoft Maria Desktop - Portuguese(Brazil)\n"
         "Microsoft Zira Desktop - English (United States)\n\n"
     )
 
-    found = SystemSpeechProvider(runner=runner).list_voices()
+    found = SystemSpeechProvider(runner=runner).raw_voice_descriptions()
 
     assert found == [
         "Microsoft Maria Desktop - Portuguese(Brazil)",
         "Microsoft Zira Desktop - English (United States)",
     ]
+
+
+@windows_only
+def test_list_voices_wraps_each_description_as_voice_info() -> None:
+    runner = RecordingRunner(output="Microsoft Maria Desktop - Portuguese(Brazil)\n")
+
+    found = SystemSpeechProvider(runner=runner).list_voices()
+
+    assert len(found) == 1
+    assert found[0].id == "Microsoft Maria Desktop - Portuguese(Brazil)"
+    assert found[0].provider == "system"
 
 
 def test_voice_is_optional_in_the_configuration() -> None:
