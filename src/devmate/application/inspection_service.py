@@ -2,13 +2,27 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from devmate.adapters.filesystem.local_filesystem import LocalFilesystem
 from devmate.adapters.persistence.repositories import RepositoryStore
 from devmate.application.context_service import ContextService
 from devmate.domain.models import ContextChunk
 from devmate.errors import UnsafePathError
+
+_SOURCE_EXTENSIONS = frozenset({".py", ".js", ".ts", ".tsx", ".go", ".java", ".rs", ".rb"})
+
+# Diretórios de dependências, cache e build nunca são código do projeto; incluí-los
+# facilmente estoura o limite de 200 arquivos (um .venv sozinho já tem milhares de .py).
+_EXCLUDED_DIRECTORY_NAMES = frozenset(
+    {"venv", "node_modules", "dist", "build", "__pycache__", "site-packages"}
+)
+
+
+def _is_excluded_directory(name: str) -> bool:
+    return name.startswith(".") or name in _EXCLUDED_DIRECTORY_NAMES or name.endswith(".egg-info")
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,21 +64,17 @@ class InspectionService:
 
     def _source_files(self) -> list[str]:
         results: list[str] = []
-        for path in self.filesystem.root.rglob("*"):
-            if not path.is_file() or ".git" in path.parts or ".devmate" in path.parts:
-                continue
-            if path.suffix.lower() not in {
-                ".py",
-                ".js",
-                ".ts",
-                ".tsx",
-                ".go",
-                ".java",
-                ".rs",
-                ".rb",
-            }:
-                continue
-            if self.filesystem.is_sensitive(path):
-                continue
-            results.append(path.relative_to(self.filesystem.root).as_posix())
+        for current_root, directory_names, file_names in os.walk(self.filesystem.root):
+            # Poda em memória: evita descer para dentro de .venv/node_modules/etc.,
+            # o que também torna a varredura rápida em vez de só filtrar o resultado.
+            directory_names[:] = [
+                name for name in directory_names if not _is_excluded_directory(name)
+            ]
+            for file_name in file_names:
+                path = Path(current_root) / file_name
+                if path.suffix.lower() not in _SOURCE_EXTENSIONS:
+                    continue
+                if self.filesystem.is_sensitive(path):
+                    continue
+                results.append(path.relative_to(self.filesystem.root).as_posix())
         return results

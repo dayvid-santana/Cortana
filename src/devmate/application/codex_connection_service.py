@@ -54,13 +54,20 @@ class CodexConnectionService:
             raise ProviderUnavailableError("Pacote openai-codex não está instalado.") from exc
         return Codex()
 
-    def status(self) -> CodexAccount:
+    def status(self, refresh: bool = False) -> CodexAccount:
+        """Consulta a conta conectada.
+
+        Por padrão lê apenas a sessão em cache (``refresh=False``): pode reportar
+        "conectada" mesmo com o token de acesso expirado, porque nada valida a
+        credencial contra a API nesse caminho. Use ``refresh=True`` para forçar a
+        renovação e detectar uma sessão que parece válida mas não é mais aceita.
+        """
         available, reason = self.available()
         if not available:
             raise ProviderUnavailableError(reason or "Provider Codex indisponível.")
         try:
             with self._client() as codex:
-                response = codex.account()
+                response = codex.account(refresh_token=refresh)
         except Exception as exc:
             raise ProviderUnavailableError(
                 f"Não foi possível consultar a conta Codex: {exc}"

@@ -56,14 +56,21 @@ class FakeBrowserHandle:
 
 class FakeCodexClient:
     def __init__(
-        self, response_after_login: FakeAccountResponse, initial: FakeAccountResponse
+        self,
+        response_after_login: FakeAccountResponse,
+        initial: FakeAccountResponse,
+        refreshed: FakeAccountResponse | None = None,
     ) -> None:
         self.response_after_login = response_after_login
         self.current = initial
+        # Simula uma sessão que parece conectada em cache, mas que a API já
+        # rejeitou: só aparece ao consultar com refresh_token=True.
+        self.refreshed = refreshed
         self.logged_out = False
         self.api_key_used: str | None = None
         self.device_handle: FakeDeviceHandle | None = None
         self.browser_handle: FakeBrowserHandle | None = None
+        self.refresh_calls: list[bool] = []
 
     def __enter__(self) -> FakeCodexClient:
         return self
@@ -71,7 +78,10 @@ class FakeCodexClient:
     def __exit__(self, *_exc: object) -> None:
         return None
 
-    def account(self) -> FakeAccountResponse:
+    def account(self, *, refresh_token: bool = False) -> FakeAccountResponse:
+        self.refresh_calls.append(refresh_token)
+        if refresh_token and self.refreshed is not None:
+            self.current = self.refreshed
         return self.current
 
     def login_chatgpt_device_code(self) -> FakeDeviceHandle:
@@ -108,6 +118,35 @@ def test_status_reports_disconnected_when_no_account() -> None:
     account = service.status()
 
     assert account.connected is False
+
+
+def test_status_without_refresh_trusts_the_cached_session_even_if_stale() -> None:
+    # Reproduz o cenário real: cache diz "conectada", mas o token expirou.
+    client = FakeCodexClient(
+        connected_response(),
+        initial=connected_response(),
+        refreshed=FakeAccountResponse(None),
+    )
+    service = make_service(client)
+
+    account = service.status()
+
+    assert account.connected is True
+    assert client.refresh_calls == [False]
+
+
+def test_status_with_refresh_reveals_an_expired_session() -> None:
+    client = FakeCodexClient(
+        connected_response(),
+        initial=connected_response(),
+        refreshed=FakeAccountResponse(None),
+    )
+    service = make_service(client)
+
+    account = service.status(refresh=True)
+
+    assert account.connected is False
+    assert client.refresh_calls == [True]
 
 
 def test_status_reports_chatgpt_account_details() -> None:

@@ -37,7 +37,7 @@ from devmate.config_writer import set_default_provider
 from devmate.constants import ASSISTANT_NAME
 from devmate.domain.enums import Scope
 from devmate.domain.models import LLMRequest
-from devmate.errors import DevMateError
+from devmate.errors import DevMateError, ProviderUnavailableError
 from devmate.logging import configure_logging
 from devmate.prompts.code_inspection import CODE_INSPECTION_SYSTEM
 
@@ -560,6 +560,7 @@ def inspect(
     runtime = _run(_runtime, as_json)
     if runtime is None:
         return
+    _ensure_indexed(runtime, commit)
     context = _run(
         lambda: runtime.inspection_service().build(
             runtime.project_id, commit, files or [], full_repo
@@ -1064,8 +1065,22 @@ def _print_codex_account(account: CodexAccount) -> None:
 
 
 @codex_app.command("status")
-def codex_status(as_json: Annotated[bool, typer.Option("--json")] = False) -> None:
-    """Mostra se há uma conta Codex conectada nesta máquina, sem iniciar login."""
+def codex_status(
+    refresh: Annotated[
+        bool,
+        typer.Option(
+            "--refresh",
+            help="Valida o token contra a API em vez de só ler a sessão em cache.",
+        ),
+    ] = False,
+    as_json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Mostra se há uma conta Codex conectada nesta máquina, sem iniciar login.
+
+    Por padrão lê apenas a sessão em cache: pode mostrar "conectada" mesmo com o
+    token expirado. Use --refresh antes de confiar na resposta para diagnosticar
+    um erro 401 em chamadas reais.
+    """
     service = CodexConnectionService()
     available, reason = service.available()
     if not available:
@@ -1074,7 +1089,7 @@ def codex_status(as_json: Annotated[bool, typer.Option("--json")] = False) -> No
         else:
             console.print(f"[yellow]{reason}[/yellow]")
         return
-    account = _run(service.status, as_json)
+    account = _run(functools.partial(service.status, refresh), as_json)
     if account is None:
         return
     if as_json:
@@ -1146,12 +1161,15 @@ def codex_connect(
 
     service = CodexConnectionService()
     if not force:
-        # A autenticação do Codex é da máquina; se já houver uma conta válida,
-        # repetir o login pediria uma confirmação desnecessária à pessoa usuária.
-        current = _run(service.status)
-        if current is None:
-            return
-        if current.connected:
+        # refresh=True porque a leitura em cache pode dizer "conectada" com um
+        # token de acesso já expirado; sem validar, o --full-repo falharia depois
+        # com 401 mesmo tendo passado por aqui. Uma falha na validação (sessão
+        # realmente morta) não deve abortar o comando: cai para o login normal.
+        try:
+            current: CodexAccount | None = service.status(refresh=True)
+        except ProviderUnavailableError:
+            current = None
+        if current is not None and current.connected:
             console.print("[green]Diana já está conectada ao Codex.[/green]")
             _print_codex_account(current)
             _print_full_repo_tip()
