@@ -65,6 +65,14 @@ class SpeechRecognitionUnavailableError(DevMateError):
     exit_code = 6
 
 
+class HotkeyUnavailableError(DevMateError):
+    exit_code = 6
+
+
+class DaemonAlreadyRunningError(DevMateError):
+    exit_code = 8
+
+
 class ReadingSessionStaleError(DevMateError):
     exit_code = 7
 

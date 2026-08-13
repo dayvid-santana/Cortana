@@ -43,3 +43,15 @@ class SpeechInputProvider(Protocol):
     def available(self) -> tuple[bool, str | None]: ...
 
     def listen(self, duration_seconds: int | None = None) -> str: ...
+
+
+class HotkeyPort(Protocol):
+    """Gatilho explícito da pessoa usuária; o microfone só abre depois dele."""
+
+    name: str
+
+    def available(self) -> tuple[bool, str | None]: ...
+
+    def wait(self) -> bool:
+        """Bloqueia até o atalho ser pressionado. ``False`` encerra o daemon."""
+        ...

@@ -37,6 +37,7 @@ class FasterWhisperInputProvider:
         self.model_directory = model_directory
         self._audio_recorder = audio_recorder
         self._model_factory = model_factory
+        self._loaded_model: Any | None = None
 
     def available(self) -> tuple[bool, str | None]:
         try:
@@ -104,8 +105,11 @@ class FasterWhisperInputProvider:
         return " ".join(str(segment.text).strip() for segment in segments).strip()
 
     def _model(self) -> Any:
+        """Reaproveita o modelo já carregado; construí-lo custa ~0,6s por rodada."""
         if self._model_factory is not None:
             return self._model_factory(self.model_name, self.model_directory)
+        if self._loaded_model is not None:
+            return self._loaded_model
         try:
             from faster_whisper import WhisperModel
         except ImportError as exc:
@@ -113,9 +117,14 @@ class FasterWhisperInputProvider:
                 "Pacote faster-whisper não está instalado."
             ) from exc
         self.model_directory.mkdir(parents=True, exist_ok=True)
-        return WhisperModel(
+        self._loaded_model = WhisperModel(
             self.model_name,
             device="cpu",
             compute_type="int8",
             download_root=str(self.model_directory),
         )
+        return self._loaded_model
+
+    def preload(self) -> None:
+        """Carrega o modelo antecipadamente, para a primeira resposta não pagar o custo."""
+        self._model()
