@@ -6,6 +6,7 @@ from devmate.adapters.git.subprocess_git import SubprocessGit
 from devmate.adapters.persistence.repositories import RepositoryStore, StoredCommit
 from devmate.domain.enums import Scope
 from devmate.domain.models import ContextChunk, SourceReference
+from devmate.errors import CommitNotFoundError
 from devmate.markdown.parser import MarkdownParser
 
 
@@ -21,7 +22,7 @@ class ContextService:
         selected_hash = reference or self.git.head()
         commit = self.store.commit(project_id, selected_hash)
         if commit is None:
-            raise ValueError("O commit atual não foi indexado. Execute `devmate scan`.")
+            raise CommitNotFoundError("O commit atual não foi indexado. Execute `devmate scan`.")
         return commit
 
     def documentation_chunks(

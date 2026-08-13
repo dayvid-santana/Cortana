@@ -153,13 +153,35 @@ devmate voices choose
 
 Quando `speech.provider = "openai"`, a síntese acontece inteiramente na API da OpenAI e o áudio resultante é apenas reproduzido localmente — as vozes instaladas no Windows não participam da narração nesse modo. `devmate voices current` mostra o provider, a voz, o modelo e o ritmo em uso; `devmate doctor` inclui uma seção de fala com o status da credencial (nunca o valor) e do player de áudio.
 
+## API HTTP
+
+Uma camada HTTP fina expõe os mesmos application services usados pela CLI, para um frontend externo consumir. Ela nunca chama a CLI por subprocess nem duplica regras — monta `ConversationService`/`InspectionConversationService` diretamente, então escopo, segurança e citações são idênticos aos do `devmate ask`/`chat`.
+
+```bash
+devmate serve                 # http://127.0.0.1:8000/api/v1
+devmate serve --port 8080 --reload
+```
+
+```bash
+curl http://127.0.0.1:8000/api/v1/health
+curl http://127.0.0.1:8000/api/v1/status
+curl -X POST http://127.0.0.1:8000/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"question": "O que mudou?", "provider": "mock", "scope": "docs"}'
+```
+
+`scope` é `"docs"` por padrão; `"code"` exige `files` ou `full_repo: true` no corpo da requisição, com a mesma autorização explícita do `inspect --full-repo`. A resposta traz `sources` estruturadas (`path`, `start_line`, `end_line`, `commit_hash`, `heading`) para o frontend linkar direto ao trecho citado, nunca inventadas a partir do texto. `source: "speech"` no corpo pede uma resposta mais concisa, para perguntas que vieram de voz transcrita.
+
+CORS aceita apenas `http://127.0.0.1:5173`/`http://localhost:5173` (o dev server padrão do Vite); `--host` continua `127.0.0.1` por padrão — não exponha em `0.0.0.0` fora de uma rede confiável. O schema OpenAPI fica disponível em `/openapi.json` para gerar um cliente tipado.
+
 ## Segurança
 
-- Escopo padrão é `docs`: código só entra em `inspect`, `ask --scope code` ou uma seleção explícita.
+- Escopo padrão é `docs`: código só entra em `inspect`, `ask --scope code` ou uma seleção explícita — inclusive pela API.
 - Caminhos, symlinks externos e padrões de segredos são bloqueados antes da leitura.
 - O conteúdo do repositório é marcado como não confiável nos prompts.
 - Git e TTS usam argumentos explícitos, timeout e nunca `shell=True`.
 - Hooks só executam `scan --metadata-only`; não chamam providers.
+- A API nunca recebe nem devolve credenciais; CORS restrito a origens locais conhecidas.
 
 Consulte [o threat model](docs/security.md).
 

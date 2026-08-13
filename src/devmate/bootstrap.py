@@ -22,7 +22,7 @@ from devmate.application.scan_service import ScanService
 from devmate.application.voice_service import VoiceCommand, VoiceConversationService
 from devmate.config import AppConfig, config_path, database_path, load_config
 from devmate.domain.ports import SpeechInputProvider, SpeechProvider
-from devmate.errors import ConfigurationError
+from devmate.errors import CommitNotFoundError, ConfigurationError
 from devmate.markdown.narrator import MarkdownNarrator
 
 
@@ -41,6 +41,20 @@ class Runtime:
         if value is None:
             raise ConfigurationError("DevMate não foi inicializado. Execute `devmate init`.")
         return value
+
+    def ensure_indexed(self, commit: str | None = None) -> bool:
+        """Indexa o commit selecionado se ele ainda não estiver no banco.
+
+        Compartilhado por CLI e API: um commit novo não deveria interromper uma
+        pergunta com um erro manual pedindo `devmate scan` — a indexação é local,
+        não chama provider nem rede. Retorna ``True`` quando indexou agora.
+        """
+        try:
+            self.context_service().selected_commit(self.project_id, commit)
+            return False
+        except CommitNotFoundError:
+            self.scan_service().scan(self.project_id, commit or "HEAD", False)
+            return True
 
     def scan_service(self) -> ScanService:
         return ScanService(

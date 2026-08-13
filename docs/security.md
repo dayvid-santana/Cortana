@@ -15,6 +15,7 @@ DevMate considera arquivos, diffs, código, comentários e headings como dados n
 | Workspace temporário | contexto mínimo, sandbox read-only e limpeza automática |
 | Áudio de entrada | gravado apenas em memória; Whisper local não persiste nem envia a gravação |
 | Histórico de conversa | reenviado como transcrição delimitada, nunca como instrução |
+| API HTTP | chama os application services diretamente (nunca subprocess da CLI); erros tipados nunca vazam traceback; CORS restrito a origens locais conhecidas; nenhuma credencial entra ou sai pelo corpo/headers |
 
 O TTS de Windows transmite texto por variável de ambiente ao processo local, não por interpolação em shell. Os providers devem ser tratados como limites de confiança: a aplicação valida paths e constrói fontes, não aceita citações inventadas da resposta.
 

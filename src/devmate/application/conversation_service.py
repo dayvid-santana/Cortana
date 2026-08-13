@@ -43,6 +43,7 @@ class ConversationService:
         provider_name: str,
         commit_ref: str | None = None,
         model: str | None = None,
+        system_instructions: str | None = None,
     ) -> Answer:
         commit, chunks = self.context.build(project_id, Scope.DOCS, commit_ref)
         # Lido antes de gravar a pergunta atual, para não duplicá-la no histórico.
@@ -52,7 +53,7 @@ class ConversationService:
             question=question,
             scope=Scope.DOCS,
             chunks=chunks,
-            system_instructions=DOCUMENTATION_CHAT_SYSTEM,
+            system_instructions=system_instructions or DOCUMENTATION_CHAT_SYSTEM,
             model=model,
             history=history,
         )

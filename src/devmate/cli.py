@@ -79,18 +79,9 @@ def _runtime() -> Runtime:
 
 
 def _ensure_indexed(runtime: Runtime, commit: str | None = None) -> None:
-    """Indexa o commit selecionado quando ele ainda não está no banco.
-
-    Um commit novo não é motivo para interromper a conversa: a indexação é local,
-    não chama provider nem rede, e é exatamente o que o erro pediria manualmente.
-    """
-    try:
-        runtime.context_service().selected_commit(runtime.project_id, commit)
-        return
-    except ValueError:
-        pass
-    console.print("[dim]Commit ainda não indexado; indexando localmente...[/dim]")
-    _run(lambda: runtime.scan_service().scan(runtime.project_id, commit or "HEAD", False))
+    indexed_now = _run(functools.partial(runtime.ensure_indexed, commit))
+    if indexed_now:
+        console.print("[dim]Commit indexado localmente para esta execução.[/dim]")
 
 
 def _answer_data(commit: str, text: str) -> dict[str, str]:
@@ -1062,6 +1053,22 @@ def _print_codex_account(account: CodexAccount) -> None:
         console.print("Login via Amazon Bedrock.")
     else:
         console.print(f"Conectada ({account.method or 'método desconhecido'}).")
+
+
+@app.command()
+def serve(
+    host: Annotated[
+        str,
+        typer.Option("--host", help="127.0.0.1 por padrão; evite 0.0.0.0 fora de rede confiável."),
+    ] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port")] = 8000,
+    reload: Annotated[bool, typer.Option("--reload", help="Recarrega ao editar o código.")] = False,
+) -> None:
+    """Sobe a API HTTP local para um frontend, sem passar pela CLI via subprocess."""
+    import uvicorn
+
+    console.print(f"[bold]{ASSISTANT_NAME}[/bold] API em http://{host}:{port}/api/v1")
+    uvicorn.run("devmate.api.app:app", host=host, port=port, reload=reload)
 
 
 @codex_app.command("status")

@@ -33,6 +33,7 @@ class InspectionConversationService:
         model: str | None = None,
         files: list[str] | None = None,
         full_repo: bool = False,
+        system_instructions: str | None = None,
     ) -> Answer:
         context = self.inspection.build(project_id, commit_ref, files or [], full_repo)
         # Lido antes de gravar a pergunta atual, para não duplicá-la no histórico.
@@ -42,7 +43,7 @@ class InspectionConversationService:
             question=question,
             scope=Scope.CODE,
             chunks=context.chunks,
-            system_instructions=CODE_INSPECTION_SYSTEM,
+            system_instructions=system_instructions or CODE_INSPECTION_SYSTEM,
             model=model,
             history=history,
         )
