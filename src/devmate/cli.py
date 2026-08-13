@@ -277,6 +277,16 @@ def listen(
     provider: Annotated[str | None, typer.Option("--provider")] = None,
     commit: Annotated[str | None, typer.Option("--commit")] = None,
     model: Annotated[str | None, typer.Option("--model")] = None,
+    files: Annotated[
+        list[str] | None,
+        typer.Option("--files", help="Arquivos de código autorizados para a resposta."),
+    ] = None,
+    full_repo: Annotated[
+        bool,
+        typer.Option(
+            "--full-repo", help="Autoriza a análise read-only dos arquivos de código suportados."
+        ),
+    ] = False,
     duration: Annotated[
         int | None,
         typer.Option("--duration", min=1, max=60, help="Segundos de captura do microfone."),
@@ -287,12 +297,13 @@ def listen(
     ] = False,
     as_json: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Ouve uma pergunta, responde sobre a documentação e narra o resultado."""
+    """Ouve uma pergunta e narra a resposta; código exige --files ou --full-repo."""
     runtime = _run(_runtime, as_json)
     if runtime is None:
         return
     seconds = duration or runtime.config.speech.input_duration_seconds
-    console.print(f"[cyan]Ouvindo por até {seconds} segundos. Fale agora.[/cyan]")
+    scope_message = "com código selecionado" if files or full_repo else "com documentação"
+    console.print(f"[cyan]Ouvindo por até {seconds} segundos ({scope_message}). Fale agora.[/cyan]")
     result = _run(
         lambda: runtime.voice_service().listen_and_ask(
             project_id=runtime.project_id,
@@ -301,6 +312,8 @@ def listen(
             model=model,
             duration_seconds=duration,
             speak_response=not no_speak,
+            code_files=files,
+            full_repo=full_repo,
         ),
         as_json,
     )

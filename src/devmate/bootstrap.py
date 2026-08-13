@@ -13,6 +13,7 @@ from devmate.adapters.persistence.repositories import RepositoryStore
 from devmate.adapters.speech.registry import get_speech_input_provider, get_speech_provider
 from devmate.application.context_service import ContextService
 from devmate.application.conversation_service import ConversationService
+from devmate.application.inspection_conversation_service import InspectionConversationService
 from devmate.application.inspection_service import InspectionService
 from devmate.application.memory_service import MemoryService
 from devmate.application.reading_service import ReadingService
@@ -65,7 +66,12 @@ class Runtime:
             self.root / ".devmate" / "models",
         )
         conversation = ConversationService(self.store, self.context_service(), self.providers)
-        return VoiceConversationService(input_provider, output, conversation)
+        inspection_conversation = InspectionConversationService(
+            self.inspection_service(), self.store, self.providers
+        )
+        return VoiceConversationService(
+            input_provider, output, conversation, inspection_conversation
+        )
 
 
 def load_runtime(start: Path) -> Runtime:

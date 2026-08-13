@@ -67,6 +67,32 @@ class FakeConversation:
         return Answer("a" * 40, LLMResponse("Resposta falada."))
 
 
+class FakeInspectionConversation:
+    def __init__(self) -> None:
+        self.arguments: tuple[object, ...] | None = None
+
+    def ask(
+        self,
+        project_id: int,
+        question: str,
+        provider_name: str,
+        commit_ref: str | None = None,
+        model: str | None = None,
+        files: list[str] | None = None,
+        full_repo: bool = False,
+    ) -> Answer:
+        self.arguments = (
+            project_id,
+            question,
+            provider_name,
+            commit_ref,
+            model,
+            files,
+            full_repo,
+        )
+        return Answer("b" * 40, LLMResponse("Resposta sobre o código."))
+
+
 def test_faster_whisper_transcribes_audio_in_memory(tmp_path: Path) -> None:
     model = FakeWhisperModel()
     provider = FasterWhisperInputProvider(
@@ -95,3 +121,34 @@ def test_voice_service_sends_only_transcript_and_speaks_response() -> None:
     assert conversation.question == "O que mudou?"
     assert output.spoken == ["Resposta falada."]
     assert result.transcript == "O que mudou?"
+
+
+def test_voice_service_uses_code_scope_only_when_explicitly_authorized() -> None:
+    output = FakeSpeech()
+    code_conversation = FakeInspectionConversation()
+    service = VoiceConversationService(
+        FakeInput(),
+        output,
+        FakeConversation(),  # type: ignore[arg-type]
+        code_conversation,  # type: ignore[arg-type]
+    )
+
+    result = service.listen_and_ask(
+        1,
+        "codex",
+        duration_seconds=4,
+        code_files=["src/app.py"],
+        full_repo=False,
+    )
+
+    assert result.answer.response.text == "Resposta sobre o código."
+    assert code_conversation.arguments == (
+        1,
+        "O que mudou?",
+        "codex",
+        None,
+        None,
+        ["src/app.py"],
+        False,
+    )
+    assert output.spoken == ["Resposta sobre o código."]

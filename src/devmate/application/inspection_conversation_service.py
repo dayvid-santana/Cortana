@@ -1,0 +1,52 @@
+"""Perguntas rastreáveis sobre código explicitamente autorizado."""
+
+from __future__ import annotations
+
+from devmate.adapters.llm.registry import ProviderRegistry
+from devmate.adapters.persistence.repositories import RepositoryStore
+from devmate.application.conversation_service import Answer
+from devmate.application.inspection_service import InspectionService
+from devmate.domain.enums import Scope
+from devmate.domain.models import LLMRequest
+from devmate.prompts.code_inspection import CODE_INSPECTION_SYSTEM
+
+
+class InspectionConversationService:
+    """Monta contexto de código read-only e mantém a troca no histórico local."""
+
+    def __init__(
+        self,
+        inspection: InspectionService,
+        store: RepositoryStore,
+        providers: ProviderRegistry,
+    ) -> None:
+        self.inspection = inspection
+        self.store = store
+        self.providers = providers
+
+    def ask(
+        self,
+        project_id: int,
+        question: str,
+        provider_name: str,
+        commit_ref: str | None = None,
+        model: str | None = None,
+        files: list[str] | None = None,
+        full_repo: bool = False,
+    ) -> Answer:
+        context = self.inspection.build(project_id, commit_ref, files or [], full_repo)
+        request = LLMRequest(
+            task="code_inspection",
+            question=question,
+            scope=Scope.CODE,
+            chunks=context.chunks,
+            system_instructions=CODE_INSPECTION_SYSTEM,
+            model=model,
+        )
+        provider = self.providers.get(provider_name)
+        self.store.add_message(project_id, context.commit_hash, "user", question)
+        response = provider.complete(request)
+        self.store.add_message(
+            project_id, context.commit_hash, "assistant", response.text, provider_name
+        )
+        return Answer(context.commit_hash, response)

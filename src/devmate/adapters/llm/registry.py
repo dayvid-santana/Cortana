@@ -15,7 +15,10 @@ class ProviderRegistry:
     def __init__(self, config: AppConfig) -> None:
         self._providers: dict[str, LanguageModelProvider] = {
             "mock": MockProvider(),
-            "codex": CodexProvider(config.provider.model),
+            "codex": CodexProvider(
+                config.language_model.providers.codex.model or config.provider.model,
+                config.language_model.providers.codex.system_instruction,
+            ),
             "openai": OpenAIProvider(config.provider.model),
             "openai_compatible": OpenAICompatibleProvider(
                 config.provider.model, config.provider.openai_base_url

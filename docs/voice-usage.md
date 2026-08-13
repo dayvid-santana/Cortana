@@ -45,7 +45,22 @@ O áudio nunca é enviado ao provider. Apenas o texto transcrito passa para o me
 
 # Requer OPENAI_API_KEY configurada no ambiente
 .\.venv\Scripts\python.exe -m devmate listen --provider openai
+
+# Requer sessão autenticada no Codex e autoriza explicitamente o código suportado
+.\.venv\Scripts\python.exe -m devmate listen --provider codex --full-repo
 ```
+
+Com `--full-repo`, o DevMate inclui os arquivos de código suportados no commit selecionado, além da documentação disponível, em um workspace temporário e somente leitura para o Codex. Não é uma autorização permanente: sem `--full-repo` ou `--files`, `listen` continua restrito à documentação. Para limitar o escopo, prefira arquivos específicos:
+
+```powershell
+.\.venv\Scripts\python.exe -m devmate listen --provider codex --files src/devmate/cli.py
+```
+
+Exemplos de perguntas faladas:
+
+- “Cortana, analise as últimas mudanças no repositório e explique como elas impactam a arquitetura geral.”
+- “Há algum padrão de projeto predominante ou uma área que precisa de refatoração?”
+- “A documentação alterada ainda está em sincronia com o código atual?”
 
 ## Ajustes
 
@@ -61,6 +76,22 @@ input_duration_seconds = 10
 ```
 
 Modelos menores iniciam mais rapidamente; `base` é o equilíbrio padrão para português em CPU. A opção `--duration` substitui `input_duration_seconds` em uma única execução.
+
+### Comportamento do Codex
+
+O arquivo `.devmate/config.toml` contém a instrução de sistema do provider Codex. Ela é usada como orientação confiável para deixar a resposta técnica, natural e apropriada para narração:
+
+```toml
+[language_model.providers.codex]
+system_instruction = """
+Você é a Cortana, uma assistente especialista em engenharia de software integrada ao DevMate.
+Analise somente os metadados do Git, documentos e códigos fornecidos no contexto.
+Responda em português de forma natural, amigável e concisa, pois a resposta será narrada por voz.
+Relacione código, documentação e arquitetura; se não houver evidência suficiente, admita.
+"""
+```
+
+Não coloque chaves de API, tokens ou informações pessoais nesse campo. A configuração modifica a orientação da resposta, mas não amplia o escopo de arquivos nem remove o sandbox somente leitura.
 
 ## Problemas comuns
 

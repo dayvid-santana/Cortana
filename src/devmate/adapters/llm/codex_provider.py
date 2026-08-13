@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import tempfile
 from collections.abc import Callable
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from devmate.adapters.llm.openai_provider import render_input
@@ -18,9 +18,13 @@ class CodexProvider:
     name = "codex"
 
     def __init__(
-        self, model: str | None, client_factory: Callable[[Path], Any] | None = None
+        self,
+        model: str | None,
+        system_instruction: str,
+        client_factory: Callable[[Path], Any] | None = None,
     ) -> None:
         self.model = model or "gpt-5.6-terra"
+        self.system_instruction = system_instruction
         self._client_factory = client_factory
 
     def available(self) -> tuple[bool, str | None]:
@@ -39,6 +43,34 @@ class CodexProvider:
             raise ProviderUnavailableError("Pacote openai-codex não está instalado.") from exc
         return Codex(CodexConfig(cwd=str(workspace)))
 
+    @staticmethod
+    def _context_path(path: str) -> Path | None:
+        """Converte uma referência Git em caminho relativo sem permitir escapes."""
+        relative = PurePosixPath(path)
+        if relative.is_absolute() or any(
+            part in {"", ".", ".."} or ":" in part for part in relative.parts
+        ):
+            return None
+        return Path(*relative.parts)
+
+    def _write_workspace(self, workspace: Path, request: LLMRequest, prompt: str) -> None:
+        """Materializa somente o contexto já selecionado para leitura do Codex."""
+        (workspace / "context.md").write_text(prompt, encoding="utf-8")
+        selected_context = workspace / "selected_context"
+        for chunk in request.chunks:
+            relative = self._context_path(chunk.reference.path)
+            if relative is None:
+                continue
+            destination = selected_context / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with destination.open("a", encoding="utf-8") as file:
+                marker = (
+                    f"\n\n# Trecho: linhas {chunk.reference.start_line}"
+                    f"-{chunk.reference.end_line}\n"
+                )
+                file.write(marker)
+                file.write(chunk.text)
+
     def complete(self, request: LLMRequest) -> LLMResponse:
         available, reason = self.available()
         if not available and self._client_factory is None:
@@ -49,15 +81,18 @@ class CodexProvider:
 
             with tempfile.TemporaryDirectory(prefix="devmate-codex-") as temporary:
                 workspace = Path(temporary)
-                (workspace / "context.md").write_text(prompt, encoding="utf-8")
+                self._write_workspace(workspace, request, prompt)
                 with self._client(workspace) as codex:
                     thread = codex.thread_start(
                         model=request.model or self.model,
                         sandbox=Sandbox.read_only,
                         cwd=str(workspace),
                         developer_instructions=(
-                            "Read only context.md. Do not execute commands, modify files, "
-                            "or access other paths."
+                            f"{self.system_instruction}\n\n"
+                            "Leia somente context.md e, se necessário, os arquivos em "
+                            "selected_context. Eles contêm exclusivamente o contexto já "
+                            "autorizado. Não execute comandos, "
+                            "não modifique arquivos e não acesse outros caminhos."
                         ),
                     )
                     result = thread.run(

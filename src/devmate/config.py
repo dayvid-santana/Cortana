@@ -27,6 +27,37 @@ class ProviderConfig(BaseModel):
     openai_base_url: str | None = None
 
 
+DEFAULT_CODEX_SYSTEM_INSTRUCTION = (
+    "Você é a Cortana, uma assistente especialista em engenharia de software "
+    "integrada ao DevMate.\n"
+    "Sua tarefa é analisar os metadados do Git, documentos e códigos fornecidos no contexto.\n"
+    "\n"
+    "Diretrizes de resposta:\n"
+    "1. Vá além do óbvio e relacione mudanças no código com impactos na documentação "
+    "e na arquitetura.\n"
+    "2. Responda de forma natural, amigável e concisa, pois a resposta poderá ser "
+    "narrada por voz.\n"
+    "3. Prefira frases completas e conectivos naturais. Evite listas longas ou "
+    "caracteres especiais complexos.\n"
+    "4. Baseie-se apenas nos dados fornecidos no contexto. Se não souber algo, admita."
+)
+
+
+class CodexProviderSettings(BaseModel):
+    """Comportamento confiável configurado localmente para o provider Codex."""
+
+    model: str | None = None
+    system_instruction: str = Field(default=DEFAULT_CODEX_SYSTEM_INSTRUCTION, min_length=1)
+
+
+class LanguageModelProvidersConfig(BaseModel):
+    codex: CodexProviderSettings = Field(default_factory=CodexProviderSettings)
+
+
+class LanguageModelConfig(BaseModel):
+    providers: LanguageModelProvidersConfig = Field(default_factory=LanguageModelProvidersConfig)
+
+
 class SecurityConfig(BaseModel):
     max_file_bytes: int = Field(default=DEFAULT_MAX_FILE_BYTES, gt=0)
     max_diff_chars: int = Field(default=DEFAULT_MAX_DIFF_CHARS, gt=0)
@@ -62,6 +93,7 @@ class AppConfig(BaseModel):
     """Configuração persistida em ``.devmate/config.toml``."""
 
     provider: ProviderConfig = Field(default_factory=ProviderConfig)
+    language_model: LanguageModelConfig = Field(default_factory=LanguageModelConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     speech: SpeechConfig = Field(default_factory=SpeechConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
@@ -73,6 +105,20 @@ DEFAULT_CONFIG_TOML = (
     'default = "mock"\n'
     '# model = ""\n'
     '# openai_base_url = "https://api.exemplo.local/v1"\n\n'
+    "[language_model.providers.codex]\n"
+    'system_instruction = """\n'
+    "Você é a Cortana, uma assistente especialista em engenharia de software integrada ao "
+    "DevMate.\n"
+    "Sua tarefa é analisar os metadados do Git, documentos e códigos fornecidos no contexto.\n\n"
+    "Diretrizes de resposta:\n"
+    "1. Análise profunda: vá além do óbvio e relacione mudanças no código com impactos na "
+    "documentação e na arquitetura.\n"
+    "2. Responda de forma natural, amigável e concisa, pois a resposta poderá ser narrada por "
+    "voz.\n"
+    "3. Prefira frases completas e conectivos naturais. Evite listas longas ou caracteres "
+    "especiais complexos.\n"
+    "4. Baseie-se apenas nos dados fornecidos no contexto. Se não souber algo, admita.\n"
+    '"""\n\n'
     "[security]\n"
     "max_file_bytes = 512000\n"
     "max_diff_chars = 80000\n"

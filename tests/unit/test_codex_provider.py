@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from openai_codex import Sandbox
 
 from devmate.adapters.llm.codex_provider import CodexProvider
@@ -38,7 +40,15 @@ class FakeCodex:
 
 def test_codex_provider_starts_and_runs_read_only_thread() -> None:
     fake = FakeCodex()
-    provider = CodexProvider(None, client_factory=lambda _workspace: fake)
+    captured: dict[str, str] = {}
+
+    def client_factory(workspace: Path) -> FakeCodex:
+        captured["source"] = (workspace / "selected_context" / "src" / "app.py").read_text(
+            encoding="utf-8"
+        )
+        return fake
+
+    provider = CodexProvider("modelo", "Instrução da Cortana.", client_factory=client_factory)
     request = LLMRequest(
         "inspect",
         "Verifique.",
@@ -49,4 +59,6 @@ def test_codex_provider_starts_and_runs_read_only_thread() -> None:
     response = provider.complete(request)
     assert response.text == "Análise pronta."
     assert fake.started_with["sandbox"] is Sandbox.read_only
+    assert "Instrução da Cortana." in str(fake.started_with["developer_instructions"])
     assert fake.thread.sandbox is Sandbox.read_only
+    assert "x = 1" in captured["source"]

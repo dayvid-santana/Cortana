@@ -60,9 +60,10 @@ devmate providers list
 devmate ask --provider mock "Explique a documentação"
 OPENAI_API_KEY=... devmate ask --provider openai "Explique a documentação"
 devmate inspect --provider codex --files src/app.py "O código segue docs/auth.md?"
+devmate listen --provider codex --full-repo
 ```
 
-`codex` usa o SDK oficial `openai-codex` em `Sandbox.read_only`, com um workspace temporário que contém apenas o contexto selecionado. `openai` usa Responses API. `openai_compatible` exige `provider.openai_base_url` configurado e não pressupõe ferramentas ou capabilities extras.
+`codex` usa o SDK oficial `openai-codex` em `Sandbox.read_only`, com um workspace temporário que contém apenas o contexto selecionado. O comportamento de voz fica em `[language_model.providers.codex]` no `.devmate/config.toml`; esse prompt é uma instrução local confiável e não deve conter segredos. `openai` usa Responses API. `openai_compatible` exige `provider.openai_base_url` configurado e não pressupõe ferramentas ou capabilities extras.
 
 ## Leitura em voz alta
 
