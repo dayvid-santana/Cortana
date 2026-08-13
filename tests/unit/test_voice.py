@@ -6,7 +6,13 @@ import pytest
 
 from devmate.adapters.speech.faster_whisper_provider import FasterWhisperInputProvider
 from devmate.application.conversation_service import Answer, load_history
-from devmate.application.voice_service import VoiceConversationService, is_exit_phrase
+from devmate.application.reading_service import ReadingResult
+from devmate.application.voice_service import (
+    VoiceConversationService,
+    VoiceReading,
+    is_exit_phrase,
+    is_readme_read_phrase,
+)
 from devmate.domain.models import ConversationTurn, LLMResponse
 from devmate.errors import SpeechRecognitionUnavailableError
 
@@ -195,6 +201,35 @@ class RecordingConversation:
         return Answer("c" * 40, LLMResponse(f"Resposta {len(self.questions)}."))
 
 
+class ReadmeInput:
+    name = "readme"
+
+    def available(self) -> tuple[bool, str | None]:
+        return True, None
+
+    def listen(self, duration_seconds: int | None = None) -> str:
+        assert duration_seconds == 4
+        return "Diana, leia o README.md."
+
+
+class FakeReading:
+    def __init__(self) -> None:
+        self.arguments: tuple[int, str, bool] | None = None
+
+    def read(
+        self,
+        project_id: int,
+        requested_path: str,
+        section: str | None = None,
+        dry_run: bool = False,
+        resume: bool = False,
+    ) -> ReadingResult:
+        assert section is None
+        assert not resume
+        self.arguments = (project_id, requested_path, dry_run)
+        return ReadingResult("README.md", (), dry_run)
+
+
 @pytest.mark.parametrize("phrase", ["sair", "Tchau!", "  ATÉ LOGO  ", "encerrar."])
 def test_exit_phrases_are_recognized_despite_case_and_punctuation(phrase: str) -> None:
     assert is_exit_phrase(phrase)
@@ -203,6 +238,34 @@ def test_exit_phrases_are_recognized_despite_case_and_punctuation(phrase: str) -
 @pytest.mark.parametrize("phrase", ["o que mudou?", "saiba mais sobre o scan", ""])
 def test_regular_questions_are_not_treated_as_exit(phrase: str) -> None:
     assert not is_exit_phrase(phrase)
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    ["leia readme", "Diana, leia o README.md.", "ler o readme"],
+)
+def test_readme_read_phrases_are_recognized(phrase: str) -> None:
+    assert is_readme_read_phrase(phrase)
+
+
+def test_readme_voice_command_uses_local_reader_without_calling_provider() -> None:
+    output = FakeSpeech()
+    conversation = RecordingConversation()
+    reader = FakeReading()
+    service = VoiceConversationService(
+        ReadmeInput(),  # type: ignore[arg-type]
+        output,
+        conversation,  # type: ignore[arg-type]
+        reading=reader,  # type: ignore[arg-type]
+    )
+
+    result = service.listen_and_ask(1, "codex", duration_seconds=4)
+
+    assert isinstance(result, VoiceReading)
+    assert result.result.path == "README.md"
+    assert reader.arguments == (1, "README.md", False)
+    assert conversation.questions == []
+    assert output.spoken == []
 
 
 def test_converse_runs_successive_rounds_until_the_exit_phrase() -> None:

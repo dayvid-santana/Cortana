@@ -13,7 +13,16 @@ from devmate.errors import DatabaseError
 
 def create_database_engine(path: Path) -> Engine:
     path.parent.mkdir(parents=True, exist_ok=True)
-    return create_engine(f"sqlite:///{path.as_posix()}", future=True)
+    engine = create_engine(f"sqlite:///{path.as_posix()}", future=True)
+    # WAL permite que o daemon residente e um comando em outro terminal convivam
+    # sem `database is locked`; o modo é persistido no arquivo, então basta uma vez.
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("PRAGMA journal_mode=WAL"))
+            connection.execute(text("PRAGMA busy_timeout=5000"))
+    except Exception as exc:
+        raise DatabaseError(f"Não foi possível configurar o banco: {exc}") from exc
+    return engine
 
 
 def migrate_database(engine: Engine) -> None:

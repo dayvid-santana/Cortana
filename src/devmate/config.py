@@ -86,6 +86,13 @@ class SpeechConfig(BaseModel):
     input_duration_seconds: int = Field(default=10, ge=1, le=60)
 
 
+class DaemonConfig(BaseModel):
+    """Processo residente acionado por atalho global."""
+
+    hotkey: str = Field(default="ctrl+alt+d", min_length=1)
+    preload_model: bool = True
+
+
 class LoggingConfig(BaseModel):
     include_content: bool = False
 
@@ -97,6 +104,7 @@ class AppConfig(BaseModel):
     language_model: LanguageModelConfig = Field(default_factory=LanguageModelConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     speech: SpeechConfig = Field(default_factory=SpeechConfig)
+    daemon: DaemonConfig = Field(default_factory=DaemonConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
 
@@ -133,6 +141,9 @@ DEFAULT_CONFIG_TOML = (
     'input_model = "base"\n'
     'input_language = "pt-BR"\n'
     "input_duration_seconds = 10\n\n"
+    "[daemon]\n"
+    'hotkey = "ctrl+alt+d"\n'
+    "preload_model = true\n\n"
     "[logging]\n"
     "include_content = false\n"
 )

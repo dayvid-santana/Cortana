@@ -15,11 +15,13 @@ from devmate.application.context_service import ContextService
 from devmate.application.conversation_service import ConversationService
 from devmate.application.inspection_conversation_service import InspectionConversationService
 from devmate.application.inspection_service import InspectionService
+from devmate.application.instance_lock import InstanceLock
 from devmate.application.memory_service import MemoryService
 from devmate.application.reading_service import ReadingService
 from devmate.application.scan_service import ScanService
 from devmate.application.voice_service import VoiceConversationService
 from devmate.config import AppConfig, config_path, database_path, load_config
+from devmate.domain.ports import SpeechInputProvider
 from devmate.errors import ConfigurationError
 from devmate.markdown.narrator import MarkdownNarrator
 
@@ -58,19 +60,31 @@ class Runtime:
         speech = get_speech_provider(self.config.speech.provider, self.config)
         return ReadingService(self.filesystem, self.store, MarkdownNarrator(), speech)
 
-    def voice_service(self) -> VoiceConversationService:
-        output = get_speech_provider(self.config.speech.provider, self.config)
-        input_provider = get_speech_input_provider(
+    def speech_input(self) -> SpeechInputProvider:
+        return get_speech_input_provider(
             self.config.speech.input_provider,
             self.config,
             self.root / ".devmate" / "models",
         )
+
+    def daemon_lock(self) -> InstanceLock:
+        return InstanceLock(self.root / ".devmate" / "daemon.lock")
+
+    def voice_service(
+        self, input_provider: SpeechInputProvider | None = None
+    ) -> VoiceConversationService:
+        output = get_speech_provider(self.config.speech.provider, self.config)
+        input_provider = input_provider or self.speech_input()
         conversation = ConversationService(self.store, self.context_service(), self.providers)
         inspection_conversation = InspectionConversationService(
             self.inspection_service(), self.store, self.providers
         )
         return VoiceConversationService(
-            input_provider, output, conversation, inspection_conversation
+            input_provider,
+            output,
+            conversation,
+            inspection_conversation,
+            self.reading_service(),
         )
 
 

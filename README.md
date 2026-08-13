@@ -91,6 +91,8 @@ Para uma conversa contínua, `talk` mantém a Diana escutando entre as rodadas e
 devmate talk --provider mock
 ```
 
+Durante a conversa, diga **"Diana, leia o README"** para narrar `README.md` localmente, sem chamar o provider de linguagem.
+
 No primeiro uso, o modelo configurado (`base`) é baixado para `.devmate/models`; depois, a captura e a transcrição permanecem locais e o áudio não é salvo. Para mudar a janela de captura, use `--duration 15`. `--no-speak` mantém a transcrição e a resposta no terminal sem reproduzir áudio. Se for usado um provider remoto, somente a pergunta já transcrita — nunca a gravação — é enviada ao provider.
 
 Consulte o [guia de conversa por voz](docs/voice-usage.md) para a preparação no Windows e solução de problemas.

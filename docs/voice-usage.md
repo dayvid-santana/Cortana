@@ -55,6 +55,12 @@ Para encerrar, diga **"sair"**, **"tchau"**, **"encerrar"** ou **"até logo"**, 
 
 As mesmas opções de `listen` valem aqui, incluindo `--duration`, `--no-speak`, `--files` e `--full-repo`.
 
+### Comando curto: ler o README
+
+Durante `diana` ou `devmate talk`, diga **"Diana, leia o README"**. A Diana reconhece a frase localmente e narra `README.md` sem enviar esse comando ao Codex. Também são aceitas as formas **"leia readme"** e **"leia o README.md"**.
+
+Ao terminar, a conversa continua escutando. Diga **"sair"** para encerrar.
+
 ## Providers de resposta
 
 O áudio nunca é enviado ao provider. Apenas o texto transcrito passa para o mesmo fluxo seguro do comando `ask`.

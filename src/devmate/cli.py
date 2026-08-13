@@ -14,11 +14,14 @@ from rich.console import Console
 from rich.table import Table
 
 from devmate import __version__
+from devmate.adapters.hotkey.windows_hotkey import WindowsHotkey
 from devmate.application.conversation_service import ConversationService
+from devmate.application.daemon_service import DaemonService
 from devmate.application.doctor_service import doctor
 from devmate.application.hooks_service import hook_installed, install_hook, uninstall_hook
 from devmate.application.inspection_service import InspectionContext
 from devmate.application.project_service import initialize_project
+from devmate.application.voice_service import VoiceReading
 from devmate.bootstrap import Runtime, load_runtime
 from devmate.constants import ASSISTANT_NAME
 from devmate.domain.enums import Scope
@@ -341,15 +344,28 @@ def listen(
     )
     if result is None:
         return
-    data = {
-        "transcript": result.transcript,
-        "commit": result.answer.commit_hash,
-        "answer": result.answer.response.text,
-    }
+    if isinstance(result, VoiceReading):
+        data = {
+            "transcript": result.transcript,
+            "action": "read",
+            "path": result.result.path,
+            "segments": len(result.result.segments),
+        }
+    else:
+        data = {
+            "transcript": result.transcript,
+            "commit": result.answer.commit_hash,
+            "answer": result.answer.response.text,
+        }
     if as_json:
         typer.echo(json.dumps(data, ensure_ascii=False))
         return
     console.print(f"[bold]Você:[/bold] {result.transcript}\n")
+    if isinstance(result, VoiceReading):
+        console.print(
+            f"[bold]{ASSISTANT_NAME}:[/bold] Leitura local de {result.result.path} concluída."
+        )
+        return
     console.print(
         f"[bold]Commit {result.answer.commit_hash[:7]}[/bold]\n\n{result.answer.response.text}"
     )
@@ -415,10 +431,90 @@ def talk(
             if turn is None:
                 break
             console.print(f"[bold]Você:[/bold] {turn.transcript}")
+            if isinstance(turn, VoiceReading):
+                console.print(
+                    f"[bold]{ASSISTANT_NAME}:[/bold] Leitura local de "
+                    f"{turn.result.path} concluída.\n"
+                )
+                continue
             console.print(f"[bold]{ASSISTANT_NAME}:[/bold] {turn.answer.response.text}\n")
     except (EOFError, KeyboardInterrupt):
         console.print()
     console.print("[dim]Conversa encerrada.[/dim]")
+
+
+@app.command()
+def daemon(
+    provider: Annotated[str | None, typer.Option("--provider")] = None,
+    commit: Annotated[str | None, typer.Option("--commit")] = None,
+    model: Annotated[str | None, typer.Option("--model")] = None,
+    hotkey: Annotated[
+        str | None, typer.Option("--hotkey", help="Combinação global, ex.: ctrl+alt+d.")
+    ] = None,
+    duration: Annotated[
+        int | None,
+        typer.Option("--duration", min=1, max=60, help="Segundos de captura por rodada."),
+    ] = None,
+    no_speak: Annotated[bool, typer.Option("--no-speak", help="Não narra as respostas.")] = False,
+) -> None:
+    """Mantém a Diana residente; o microfone só abre no atalho global."""
+    runtime = _run(_runtime)
+    if runtime is None:
+        return
+    combination = hotkey or runtime.config.daemon.hotkey
+    trigger = WindowsHotkey(combination)
+    available, reason = trigger.available()
+    if not available:
+        console.print(f"[red]Erro:[/red] {reason}")
+        raise typer.Exit(6)
+
+    input_provider = _run(runtime.speech_input)
+    if input_provider is None:
+        return
+    if runtime.config.daemon.preload_model and hasattr(input_provider, "preload"):
+        console.print("[dim]Carregando o modelo de voz...[/dim]")
+        _run(input_provider.preload)
+
+    service = DaemonService(
+        trigger,
+        runtime.voice_service(input_provider),
+        before_round=lambda: _ensure_indexed(runtime, commit),
+    )
+    lock = runtime.daemon_lock()
+    _run(lock.acquire)
+    console.print(
+        f"[bold]{ASSISTANT_NAME}[/bold] está ativa. Pressione "
+        f"[bold]{combination}[/bold] para falar; Ctrl+C encerra."
+    )
+    try:
+        with trigger:
+            for round_result in service.run(
+                project_id=runtime.project_id,
+                provider_name=provider or runtime.config.provider.default,
+                commit_ref=commit,
+                model=model,
+                duration_seconds=duration,
+                speak_response=not no_speak,
+            ):
+                if round_result.error is not None:
+                    console.print(f"[yellow]{round_result.error}[/yellow]")
+                    continue
+                answer = round_result.answer
+                if answer is None:
+                    continue
+                console.print(f"[bold]Você:[/bold] {answer.transcript}")
+                if isinstance(answer, VoiceReading):
+                    console.print(
+                        f"[bold]{ASSISTANT_NAME}:[/bold] Leitura local de "
+                        f"{answer.result.path} concluída.\n"
+                    )
+                    continue
+                console.print(f"[bold]{ASSISTANT_NAME}:[/bold] {answer.answer.response.text}\n")
+    except KeyboardInterrupt:
+        console.print()
+    finally:
+        lock.release()
+    console.print("[dim]Diana encerrada.[/dim]")
 
 
 @app.command()
