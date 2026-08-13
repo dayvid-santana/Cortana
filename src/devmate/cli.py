@@ -62,6 +62,21 @@ def _runtime() -> Runtime:
     return load_runtime(Path.cwd())
 
 
+def _ensure_indexed(runtime: Runtime, commit: str | None = None) -> None:
+    """Indexa o commit selecionado quando ele ainda não está no banco.
+
+    Um commit novo não é motivo para interromper a conversa: a indexação é local,
+    não chama provider nem rede, e é exatamente o que o erro pediria manualmente.
+    """
+    try:
+        runtime.context_service().selected_commit(runtime.project_id, commit)
+        return
+    except ValueError:
+        pass
+    console.print("[dim]Commit ainda não indexado; indexando localmente...[/dim]")
+    _run(lambda: runtime.scan_service().scan(runtime.project_id, commit or "HEAD", False))
+
+
 def _answer_data(commit: str, text: str) -> dict[str, str]:
     return {"commit": commit, "answer": text}
 
@@ -220,6 +235,7 @@ def ask(
     runtime = _run(_runtime, as_json)
     if runtime is None:
         return
+    _ensure_indexed(runtime, commit)
     answer = _run(
         lambda: ConversationService(
             runtime.store, runtime.context_service(), runtime.providers
@@ -246,6 +262,7 @@ def chat(
     runtime = _run(_runtime)
     if runtime is None:
         return
+    _ensure_indexed(runtime, commit)
     service = ConversationService(runtime.store, runtime.context_service(), runtime.providers)
     selected = _run(lambda: runtime.context_service().selected_commit(runtime.project_id, commit))
     if selected is None:
@@ -305,6 +322,7 @@ def listen(
     runtime = _run(_runtime, as_json)
     if runtime is None:
         return
+    _ensure_indexed(runtime, commit)
     seconds = duration or runtime.config.speech.input_duration_seconds
     scope_message = "com código selecionado" if files or full_repo else "com documentação"
     console.print(f"[cyan]Ouvindo por até {seconds} segundos ({scope_message}). Fale agora.[/cyan]")
@@ -365,6 +383,7 @@ def talk(
     runtime = _run(_runtime)
     if runtime is None:
         return
+    _ensure_indexed(runtime, commit)
     seconds = duration or runtime.config.speech.input_duration_seconds
     scope_message = "com código selecionado" if files or full_repo else "com documentação"
     console.print(
@@ -671,4 +690,23 @@ def config_validate() -> None:
 def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="replace")
+    app()
+
+
+def talk_main() -> None:
+    """Atalho ``diana``: conversa por voz direto, sem subcomando.
+
+    Qualquer outro subcomando continua acessível (``diana scan``, ``diana doctor``),
+    portanto o atalho não esconde o resto da CLI.
+    """
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
+    known = {
+        command.name or (command.callback.__name__ if command.callback else "")
+        for command in app.registered_commands
+    }
+    known.update({"providers", "hooks", "config", "--help", "-h", "--version"})
+    arguments = sys.argv[1:]
+    if not arguments or arguments[0] not in known:
+        sys.argv = [sys.argv[0], "talk", *arguments]
     app()

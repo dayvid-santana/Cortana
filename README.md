@@ -47,6 +47,7 @@ docker compose run --rm --entrypoint sh devmate
 docker compose run --rm --entrypoint sh devmate -lc "uv sync --all-extras && uv run pytest"
 ```
 
+
 Em contêiner, o provider de fala do sistema não acessa a voz do host; use `read --dry-run` ou altere o provider para `null` em testes. Providers remotos continuam opt-in e exigem as credenciais configuradas no ambiente do contêiner.
 
 Consulte o [guia completo de uso com Docker](docs/docker-usage.md) para o fluxo de primeiro uso, testes, providers e diagnóstico.

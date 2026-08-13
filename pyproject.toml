@@ -38,6 +38,7 @@ dev = [
 
 [project.scripts]
 devmate = "devmate.cli:main"
+diana = "devmate.cli:talk_main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/devmate"]
