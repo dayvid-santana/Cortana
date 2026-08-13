@@ -63,7 +63,24 @@ class AppConfig(BaseModel):
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
 
-DEFAULT_CONFIG_TOML = """# Configuração local do DevMate. Não armazene chaves neste arquivo.\n\n[provider]\ndefault = \"mock\"\n# model = \"\"\n# openai_base_url = \"https://api.exemplo.local/v1\"\n\n[security]\nmax_file_bytes = 512000\nmax_diff_chars = 80000\nfollow_external_symlinks = false\nignored_patterns = [\".env\", \".env.*\", \"*.pem\", \"*.key\", \"id_rsa\", \"id_ed25519\", \"credentials*\", \"secrets*\"]\n\n[speech]\nprovider = \"system\"\nrate = 180\n\n[logging]\ninclude_content = false\n"""
+DEFAULT_CONFIG_TOML = (
+    "# Configuração local do DevMate. Não armazene chaves neste arquivo.\n\n"
+    "[provider]\n"
+    'default = "mock"\n'
+    '# model = ""\n'
+    '# openai_base_url = "https://api.exemplo.local/v1"\n\n'
+    "[security]\n"
+    "max_file_bytes = 512000\n"
+    "max_diff_chars = 80000\n"
+    "follow_external_symlinks = false\n"
+    'ignored_patterns = [".env", ".env.*", "*.pem", "*.key", "id_rsa", '
+    '"id_ed25519", "credentials*", "secrets*"]\n\n'
+    "[speech]\n"
+    'provider = "system"\n'
+    "rate = 180\n\n"
+    "[logging]\n"
+    "include_content = false\n"
+)
 
 
 def state_directory(root: Path) -> Path:

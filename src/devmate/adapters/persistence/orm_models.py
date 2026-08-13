@@ -74,7 +74,11 @@ class CommitAnalysisORM(Base):
     __tablename__ = "commit_analyses"
     __table_args__ = (
         UniqueConstraint(
-            "commit_id", "provider_name", "model_name", "prompt_version", "analysis_version",
+            "commit_id",
+            "provider_name",
+            "model_name",
+            "prompt_version",
+            "analysis_version",
             name="uq_commit_analysis_version",
         ),
     )
@@ -123,7 +127,9 @@ class DecisionORM(Base):
     source_heading: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     source_start_line: Mapped[int | None] = mapped_column(nullable=True)
     source_end_line: Mapped[int | None] = mapped_column(nullable=True)
-    supersedes_decision_id: Mapped[int | None] = mapped_column(ForeignKey("decisions.id"), nullable=True)
+    supersedes_decision_id: Mapped[int | None] = mapped_column(
+        ForeignKey("decisions.id"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
