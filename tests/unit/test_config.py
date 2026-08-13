@@ -3,12 +3,13 @@ from __future__ import annotations
 import tomllib
 
 from devmate.config import DEFAULT_CONFIG_TOML, AppConfig
+from devmate.constants import ASSISTANT_NAME
 
 
-def test_default_config_exposes_cortana_instruction_for_codex() -> None:
+def test_default_config_exposes_the_assistant_instruction_for_codex() -> None:
     config = AppConfig.model_validate(tomllib.loads(DEFAULT_CONFIG_TOML))
 
-    assert "Você é a Cortana" in config.language_model.providers.codex.system_instruction
+    assert f"Você é a {ASSISTANT_NAME}" in config.language_model.providers.codex.system_instruction
     assert "narrada por voz" in config.language_model.providers.codex.system_instruction
 
 

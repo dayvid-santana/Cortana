@@ -20,6 +20,7 @@ from devmate.application.hooks_service import hook_installed, install_hook, unin
 from devmate.application.inspection_service import InspectionContext
 from devmate.application.project_service import initialize_project
 from devmate.bootstrap import Runtime, load_runtime
+from devmate.constants import ASSISTANT_NAME
 from devmate.domain.enums import Scope
 from devmate.domain.models import LLMRequest
 from devmate.errors import DevMateError
@@ -249,7 +250,10 @@ def chat(
     selected = _run(lambda: runtime.context_service().selected_commit(runtime.project_id, commit))
     if selected is None:
         return
-    console.print(f"Conversa no commit [bold]{selected.short_hash}[/bold]. Digite /exit para sair.")
+    console.print(
+        f"Conversa com [bold]{ASSISTANT_NAME}[/bold] no commit [bold]{selected.short_hash}[/bold]. "
+        "Digite /exit para sair."
+    )
     while True:
         try:
             question = typer.prompt("Você")
@@ -269,7 +273,7 @@ def chat(
 
         answer = _run(submit)
         if answer:
-            console.print(f"\n{answer.response.text}\n")
+            console.print(f"\n[bold]{ASSISTANT_NAME}:[/bold] {answer.response.text}\n")
 
 
 @app.command()
@@ -331,6 +335,71 @@ def listen(
     console.print(
         f"[bold]Commit {result.answer.commit_hash[:7]}[/bold]\n\n{result.answer.response.text}"
     )
+
+
+@app.command()
+def talk(
+    provider: Annotated[str | None, typer.Option("--provider")] = None,
+    commit: Annotated[str | None, typer.Option("--commit")] = None,
+    model: Annotated[str | None, typer.Option("--model")] = None,
+    files: Annotated[
+        list[str] | None,
+        typer.Option("--files", help="Arquivos de código autorizados para a resposta."),
+    ] = None,
+    full_repo: Annotated[
+        bool,
+        typer.Option(
+            "--full-repo", help="Autoriza a análise read-only dos arquivos de código suportados."
+        ),
+    ] = False,
+    duration: Annotated[
+        int | None,
+        typer.Option("--duration", min=1, max=60, help="Segundos de captura por rodada."),
+    ] = None,
+    no_speak: Annotated[
+        bool,
+        typer.Option("--no-speak", help="Exibe as respostas sem narrá-las."),
+    ] = False,
+) -> None:
+    """Conversa contínua por voz; diga "sair" ou "tchau" para encerrar."""
+    runtime = _run(_runtime)
+    if runtime is None:
+        return
+    seconds = duration or runtime.config.speech.input_duration_seconds
+    scope_message = "com código selecionado" if files or full_repo else "com documentação"
+    console.print(
+        f"[bold]{ASSISTANT_NAME}[/bold] está ouvindo {scope_message}, "
+        f"{seconds}s por rodada.\n"
+        f'Diga "sair" ou "tchau" para encerrar, ou use Ctrl+C.\n'
+    )
+
+    def rounds() -> Any:
+        return runtime.voice_service().converse(
+            project_id=runtime.project_id,
+            provider_name=provider or runtime.config.provider.default,
+            commit_ref=commit,
+            model=model,
+            duration_seconds=duration,
+            speak_response=not no_speak,
+            code_files=files,
+            full_repo=full_repo,
+            on_notice=lambda message: console.print(f"[yellow]{message}[/yellow]"),
+        )
+
+    stream = _run(rounds)
+    if stream is None:
+        return
+    try:
+        while True:
+            console.print("[cyan]Ouvindo...[/cyan]")
+            turn = _run(lambda: next(stream, None))
+            if turn is None:
+                break
+            console.print(f"[bold]Você:[/bold] {turn.transcript}")
+            console.print(f"[bold]{ASSISTANT_NAME}:[/bold] {turn.answer.response.text}\n")
+    except (EOFError, KeyboardInterrupt):
+        console.print()
+    console.print("[dim]Conversa encerrada.[/dim]")
 
 
 @app.command()

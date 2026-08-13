@@ -48,7 +48,7 @@ def test_codex_provider_starts_and_runs_read_only_thread() -> None:
         )
         return fake
 
-    provider = CodexProvider("modelo", "Instrução da Cortana.", client_factory=client_factory)
+    provider = CodexProvider("modelo", "Instrução da Diana.", client_factory=client_factory)
     request = LLMRequest(
         "inspect",
         "Verifique.",
@@ -59,6 +59,6 @@ def test_codex_provider_starts_and_runs_read_only_thread() -> None:
     response = provider.complete(request)
     assert response.text == "Análise pronta."
     assert fake.started_with["sandbox"] is Sandbox.read_only
-    assert "Instrução da Cortana." in str(fake.started_with["developer_instructions"])
+    assert "Instrução da Diana." in str(fake.started_with["developer_instructions"])
     assert fake.thread.sandbox is Sandbox.read_only
     assert "x = 1" in captured["source"]

@@ -72,6 +72,14 @@ class ContextChunk:
 
 
 @dataclass(frozen=True, slots=True)
+class ConversationTurn:
+    """Rodada anterior do mesmo diálogo, produzida localmente e portanto confiável."""
+
+    role: str
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
 class LLMRequest:
     task: str
     question: str
@@ -79,6 +87,7 @@ class LLMRequest:
     chunks: tuple[ContextChunk, ...]
     system_instructions: str
     model: str | None = None
+    history: tuple[ConversationTurn, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

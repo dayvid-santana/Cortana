@@ -1,6 +1,6 @@
 # Conversa por voz
 
-O DevMate aceita uma pergunta pelo microfone com `listen`. A transcrição é feita por Whisper no próprio computador; a gravação não é salva. A resposta é mostrada no terminal e narrada pela voz do Windows.
+A assistente do DevMate se chama **Diana**. Ela aceita uma pergunta pelo microfone com `listen`, ou mantém uma conversa contínua com `talk`. A transcrição é feita por Whisper no próprio computador; a gravação não é salva. A resposta é mostrada no terminal e narrada pela voz do Windows.
 
 ## Preparação
 
@@ -35,6 +35,26 @@ Na primeira execução, o modelo local `base` é baixado para `.devmate/models`.
 
 Use esse modo para conferir a transcrição no terminal antes de ativar a narração.
 
+## Conversa contínua
+
+`listen` responde uma pergunta e termina. Para conversar de verdade, use `talk`: a Diana escuta, responde e volta a escutar, sem repetir o comando a cada pergunta.
+
+```powershell
+.\.venv\Scripts\python.exe -m devmate talk --provider mock
+```
+
+Cada rodada é persistida no commit selecionado e as rodadas anteriores são reenviadas ao provider, portanto perguntas de acompanhamento funcionam:
+
+```
+Você:  O que mudou no README?
+Diana: (responde)
+Você:  E na parte de segurança?      <- resolvida com base na rodada anterior
+```
+
+Para encerrar, diga **"sair"**, **"tchau"**, **"encerrar"** ou **"até logo"**, ou pressione Ctrl+C. Uma rodada em que nada é reconhecido não encerra a conversa: a Diana avisa e volta a escutar, desistindo após três silêncios seguidos.
+
+As mesmas opções de `listen` valem aqui, incluindo `--duration`, `--no-speak`, `--files` e `--full-repo`.
+
 ## Providers de resposta
 
 O áudio nunca é enviado ao provider. Apenas o texto transcrito passa para o mesmo fluxo seguro do comando `ask`.
@@ -58,7 +78,7 @@ Com `--full-repo`, o DevMate inclui os arquivos de código suportados no commit 
 
 Exemplos de perguntas faladas:
 
-- “Cortana, analise as últimas mudanças no repositório e explique como elas impactam a arquitetura geral.”
+- “Diana, analise as últimas mudanças no repositório e explique como elas impactam a arquitetura geral.”
 - “Há algum padrão de projeto predominante ou uma área que precisa de refatoração?”
 - “A documentação alterada ainda está em sincronia com o código atual?”
 
@@ -84,7 +104,7 @@ O arquivo `.devmate/config.toml` contém a instrução de sistema do provider Co
 ```toml
 [language_model.providers.codex]
 system_instruction = """
-Você é a Cortana, uma assistente especialista em engenharia de software integrada ao DevMate.
+Você é a Diana, uma assistente especialista em engenharia de software integrada ao DevMate.
 Analise somente os metadados do Git, documentos e códigos fornecidos no contexto.
 Responda em português de forma natural, amigável e concisa, pois a resposta será narrada por voz.
 Relacione código, documentação e arquitetura; se não houver evidência suficiente, admita.

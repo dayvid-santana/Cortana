@@ -2,6 +2,7 @@
 
 PACKAGE_NAME = "devmate"
 DISPLAY_NAME = "DevMate"
+ASSISTANT_NAME = "Diana"
 __version__ = "0.1.0"
 CONFIG_DIRECTORY = ".devmate"
 CONFIG_FILENAME = "config.toml"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from devmate.adapters.llm.registry import ProviderRegistry
 from devmate.adapters.persistence.repositories import RepositoryStore
-from devmate.application.conversation_service import Answer
+from devmate.application.conversation_service import Answer, load_history
 from devmate.application.inspection_service import InspectionService
 from devmate.domain.enums import Scope
 from devmate.domain.models import LLMRequest
@@ -35,6 +35,8 @@ class InspectionConversationService:
         full_repo: bool = False,
     ) -> Answer:
         context = self.inspection.build(project_id, commit_ref, files or [], full_repo)
+        # Lido antes de gravar a pergunta atual, para não duplicá-la no histórico.
+        history = load_history(self.store, project_id, context.commit_hash)
         request = LLMRequest(
             task="code_inspection",
             question=question,
@@ -42,6 +44,7 @@ class InspectionConversationService:
             chunks=context.chunks,
             system_instructions=CODE_INSPECTION_SYSTEM,
             model=model,
+            history=history,
         )
         provider = self.providers.get(provider_name)
         self.store.add_message(project_id, context.commit_hash, "user", question)

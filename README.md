@@ -1,6 +1,6 @@
 # DevMate
 
-DevMate é uma assistente local para entender a evolução da documentação de um repositório Git. O contexto central é `repositório → branch → commit → documentos → decisões → perguntas → conversa`, e não apenas uma mensagem isolada.
+DevMate é uma assistente local para entender a evolução da documentação de um repositório Git. A assistente se chama **Diana**. O contexto central é `repositório → branch → commit → documentos → decisões → perguntas → conversa`, e não apenas uma mensagem isolada.
 
 ## Estado atual
 
@@ -82,6 +82,12 @@ O comando abaixo grava uma pergunta curta pelo microfone, transcreve-a localment
 ```bash
 uv sync --all-extras
 devmate listen --provider mock
+```
+
+Para uma conversa contínua, `talk` mantém a Diana escutando entre as rodadas e reenvia o histórico ao provider, de modo que perguntas de acompanhamento como "e na parte de segurança?" são resolvidas com o contexto anterior. Diga "sair" ou "tchau" para encerrar:
+
+```bash
+devmate talk --provider mock
 ```
 
 No primeiro uso, o modelo configurado (`base`) é baixado para `.devmate/models`; depois, a captura e a transcrição permanecem locais e o áudio não é salvo. Para mudar a janela de captura, use `--duration 15`. `--no-speak` mantém a transcrição e a resposta no terminal sem reproduzir áudio. Se for usado um provider remoto, somente a pergunta já transcrita — nunca a gravação — é enviada ao provider.

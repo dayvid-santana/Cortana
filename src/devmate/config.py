@@ -10,6 +10,7 @@ from typing import Any
 from pydantic import BaseModel, Field, ValidationError
 
 from devmate.constants import (
+    ASSISTANT_NAME,
     CONFIG_DIRECTORY,
     CONFIG_FILENAME,
     DATABASE_FILENAME,
@@ -28,7 +29,7 @@ class ProviderConfig(BaseModel):
 
 
 DEFAULT_CODEX_SYSTEM_INSTRUCTION = (
-    "Você é a Cortana, uma assistente especialista em engenharia de software "
+    f"Você é a {ASSISTANT_NAME}, uma assistente especialista em engenharia de software "
     "integrada ao DevMate.\n"
     "Sua tarefa é analisar os metadados do Git, documentos e códigos fornecidos no contexto.\n"
     "\n"
@@ -107,8 +108,8 @@ DEFAULT_CONFIG_TOML = (
     '# openai_base_url = "https://api.exemplo.local/v1"\n\n'
     "[language_model.providers.codex]\n"
     'system_instruction = """\n'
-    "Você é a Cortana, uma assistente especialista em engenharia de software integrada ao "
-    "DevMate.\n"
+    f"Você é a {ASSISTANT_NAME}, uma assistente especialista em engenharia de software "
+    "integrada ao DevMate.\n"
     "Sua tarefa é analisar os metadados do Git, documentos e códigos fornecidos no contexto.\n\n"
     "Diretrizes de resposta:\n"
     "1. Análise profunda: vá além do óbvio e relacione mudanças no código com impactos na "

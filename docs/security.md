@@ -14,9 +14,12 @@ DevMate considera arquivos, diffs, código, comentários e headings como dados n
 | Hook | somente `scan --metadata-only`, sem provider |
 | Workspace temporário | contexto mínimo, sandbox read-only e limpeza automática |
 | Áudio de entrada | gravado apenas em memória; Whisper local não persiste nem envia a gravação |
+| Histórico de conversa | reenviado como transcrição delimitada, nunca como instrução |
 
 O TTS de Windows transmite texto por variável de ambiente ao processo local, não por interpolação em shell. Os providers devem ser tratados como limites de confiança: a aplicação valida paths e constrói fontes, não aceita citações inventadas da resposta.
 
 O primeiro `devmate listen` pode baixar o modelo Whisper selecionado para `.devmate/models`, porque a pessoa solicitou explicitamente entrada de voz. Depois da instalação do modelo, a captura e a transcrição ocorrem localmente. Quando a conversa usa LLM remoto, somente a transcrição de texto segue para o provider.
+
+Os comandos `chat` e `talk` reenviam as rodadas anteriores do mesmo commit ao provider, para que perguntas de acompanhamento façam sentido. Esse histórico vai em `<conversation_history>`, separado do contexto do repositório e marcado explicitamente como transcrição: uma resposta anterior pode citar conteúdo do repositório, portanto ela também não é tratada como instrução. O escopo não muda com o histórico — uma rodada documental não passa a enxergar código porque uma rodada anterior o citou.
 
 `listen --full-repo` é uma autorização pontual para analisar os arquivos de código suportados. O provider Codex recebe somente o contexto selecionado em um diretório temporário e opera em sandbox de leitura. A instrução em `[language_model.providers.codex]` orienta o tom da resposta, mas não pode ampliar permissões nem tornar conteúdo do repositório confiável.

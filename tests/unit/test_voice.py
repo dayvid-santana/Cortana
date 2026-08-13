@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from devmate.adapters.speech.faster_whisper_provider import FasterWhisperInputProvider
-from devmate.application.conversation_service import Answer
-from devmate.application.voice_service import VoiceConversationService
-from devmate.domain.models import LLMResponse
+from devmate.application.conversation_service import Answer, load_history
+from devmate.application.voice_service import VoiceConversationService, is_exit_phrase
+from devmate.domain.models import ConversationTurn, LLMResponse
+from devmate.errors import SpeechRecognitionUnavailableError
 
 
 class FakeSegment:
@@ -152,3 +155,120 @@ def test_voice_service_uses_code_scope_only_when_explicitly_authorized() -> None
         False,
     )
     assert output.spoken == ["Resposta sobre o código."]
+
+
+class ScriptedInput:
+    """Reproduz uma sequência de rodadas; um item ``None`` simula silêncio."""
+
+    name = "scripted"
+
+    def __init__(self, transcripts: list[str | None]) -> None:
+        self.transcripts = list(transcripts)
+        self.calls = 0
+
+    def available(self) -> tuple[bool, str | None]:
+        return True, None
+
+    def listen(self, duration_seconds: int | None = None) -> str:
+        self.calls += 1
+        if not self.transcripts:
+            raise AssertionError("A conversa pediu mais rodadas do que o roteiro previa.")
+        transcript = self.transcripts.pop(0)
+        if transcript is None:
+            raise SpeechRecognitionUnavailableError("Nenhuma fala foi reconhecida.")
+        return transcript
+
+
+class RecordingConversation:
+    def __init__(self) -> None:
+        self.questions: list[str] = []
+
+    def ask(
+        self,
+        project_id: int,
+        question: str,
+        provider_name: str,
+        commit_ref: str | None = None,
+        model: str | None = None,
+    ) -> Answer:
+        self.questions.append(question)
+        return Answer("c" * 40, LLMResponse(f"Resposta {len(self.questions)}."))
+
+
+@pytest.mark.parametrize("phrase", ["sair", "Tchau!", "  ATÉ LOGO  ", "encerrar."])
+def test_exit_phrases_are_recognized_despite_case_and_punctuation(phrase: str) -> None:
+    assert is_exit_phrase(phrase)
+
+
+@pytest.mark.parametrize("phrase", ["o que mudou?", "saiba mais sobre o scan", ""])
+def test_regular_questions_are_not_treated_as_exit(phrase: str) -> None:
+    assert not is_exit_phrase(phrase)
+
+
+def test_converse_runs_successive_rounds_until_the_exit_phrase() -> None:
+    output = FakeSpeech()
+    conversation = RecordingConversation()
+    service = VoiceConversationService(
+        ScriptedInput(["O que mudou no README?", "E na parte de segurança?", "tchau"]),  # type: ignore[arg-type]
+        output,
+        conversation,  # type: ignore[arg-type]
+    )
+
+    turns = list(service.converse(1, "mock"))
+
+    assert [turn.transcript for turn in turns] == [
+        "O que mudou no README?",
+        "E na parte de segurança?",
+    ]
+    assert conversation.questions == ["O que mudou no README?", "E na parte de segurança?"]
+    assert output.spoken == ["Resposta 1.", "Resposta 2."]
+
+
+def test_converse_survives_a_round_without_recognized_speech() -> None:
+    conversation = RecordingConversation()
+    notices: list[str] = []
+    service = VoiceConversationService(
+        ScriptedInput([None, "O que mudou?", "sair"]),  # type: ignore[arg-type]
+        FakeSpeech(),
+        conversation,  # type: ignore[arg-type]
+    )
+
+    turns = list(service.converse(1, "mock", on_notice=notices.append))
+
+    assert [turn.transcript for turn in turns] == ["O que mudou?"]
+    assert notices == ["Nenhuma fala foi reconhecida."]
+
+
+def test_converse_gives_up_after_repeated_silence() -> None:
+    service = VoiceConversationService(
+        ScriptedInput([None, None, None]),  # type: ignore[arg-type]
+        FakeSpeech(),
+        RecordingConversation(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(SpeechRecognitionUnavailableError):
+        list(service.converse(1, "mock", max_silent_rounds=3))
+
+
+class FakeStore:
+    def __init__(self, rows: list[tuple[str, str]]) -> None:
+        self.rows = rows
+        self.arguments: tuple[int, str, int] | None = None
+
+    def conversation(
+        self, project_id: int, commit_hash: str, limit: int = 12
+    ) -> list[tuple[str, str]]:
+        self.arguments = (project_id, commit_hash, limit)
+        return self.rows
+
+
+def test_load_history_maps_persisted_rows_into_turns() -> None:
+    store = FakeStore([("user", "Primeira?"), ("assistant", "Primeira resposta.")])
+
+    history = load_history(store, 1, "d" * 40)  # type: ignore[arg-type]
+
+    assert history == (
+        ConversationTurn("user", "Primeira?"),
+        ConversationTurn("assistant", "Primeira resposta."),
+    )
+    assert store.arguments == (1, "d" * 40, 12)
