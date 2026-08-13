@@ -9,9 +9,9 @@ from devmate.application.conversation_service import Answer, load_history
 from devmate.application.reading_service import ReadingResult
 from devmate.application.voice_service import (
     VoiceConversationService,
+    VoiceReadCommand,
     VoiceReading,
     is_exit_phrase,
-    is_readme_read_phrase,
 )
 from devmate.domain.models import ConversationTurn, LLMResponse
 from devmate.errors import SpeechRecognitionUnavailableError
@@ -214,7 +214,7 @@ class ReadmeInput:
 
 class FakeReading:
     def __init__(self) -> None:
-        self.arguments: tuple[int, str, bool] | None = None
+        self.arguments: tuple[int, str, str | None, bool] | None = None
 
     def read(
         self,
@@ -224,10 +224,9 @@ class FakeReading:
         dry_run: bool = False,
         resume: bool = False,
     ) -> ReadingResult:
-        assert section is None
         assert not resume
-        self.arguments = (project_id, requested_path, dry_run)
-        return ReadingResult("README.md", (), dry_run)
+        self.arguments = (project_id, requested_path, section, dry_run)
+        return ReadingResult(requested_path, (), dry_run)
 
 
 @pytest.mark.parametrize("phrase", ["sair", "Tchau!", "  ATÉ LOGO  ", "encerrar."])
@@ -240,16 +239,17 @@ def test_regular_questions_are_not_treated_as_exit(phrase: str) -> None:
     assert not is_exit_phrase(phrase)
 
 
-@pytest.mark.parametrize(
-    "phrase",
-    ["leia o documento", "Diana, leia o documento.", "ler o documento"],
-)
-def test_readme_read_phrases_are_recognized(phrase: str) -> None:
-    assert is_readme_read_phrase(phrase)
+@pytest.mark.parametrize("phrase", ["leia o documento", "Diana, leia o documento."])
+def test_voice_read_command_recognizes_configured_phrases(phrase: str) -> None:
+    command = VoiceReadCommand(("leia o documento", "ler o documento"), "README.md")
+
+    assert command.matches(phrase)
 
 
-def test_old_readme_voice_phrase_is_not_a_special_command() -> None:
-    assert not is_readme_read_phrase("Diana, leia o README")
+def test_voice_read_command_does_not_match_unconfigured_phrase() -> None:
+    command = VoiceReadCommand(("leia o documento",), "README.md")
+
+    assert not command.matches("Diana, leia o README")
 
 
 def test_readme_voice_command_uses_local_reader_without_calling_provider() -> None:
@@ -261,15 +261,41 @@ def test_readme_voice_command_uses_local_reader_without_calling_provider() -> No
         output,
         conversation,  # type: ignore[arg-type]
         reading=reader,  # type: ignore[arg-type]
+        read_commands=(VoiceReadCommand(("leia o documento",), "README.md"),),
     )
 
     result = service.listen_and_ask(1, "codex", duration_seconds=4)
 
     assert isinstance(result, VoiceReading)
     assert result.result.path == "README.md"
-    assert reader.arguments == (1, "README.md", False)
+    assert reader.arguments == (1, "README.md", None, False)
     assert conversation.questions == []
     assert output.spoken == []
+
+
+def test_custom_voice_command_reads_its_configured_document_section() -> None:
+    output = FakeSpeech()
+    conversation = RecordingConversation()
+    reader = FakeReading()
+    service = VoiceConversationService(
+        ScriptedInput(["Diana, leia a arquitetura"]),  # type: ignore[arg-type]
+        output,
+        conversation,  # type: ignore[arg-type]
+        reading=reader,  # type: ignore[arg-type]
+        read_commands=(
+            VoiceReadCommand(
+                ("leia a arquitetura",),
+                "docs/architecture.md",
+                "Segurança",
+            ),
+        ),
+    )
+
+    result = service.listen_and_ask(1, "codex")
+
+    assert isinstance(result, VoiceReading)
+    assert reader.arguments == (1, "docs/architecture.md", "Segurança", False)
+    assert conversation.questions == []
 
 
 def test_converse_runs_successive_rounds_until_the_exit_phrase() -> None:

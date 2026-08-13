@@ -19,7 +19,7 @@ from devmate.application.instance_lock import InstanceLock
 from devmate.application.memory_service import MemoryService
 from devmate.application.reading_service import ReadingService
 from devmate.application.scan_service import ScanService
-from devmate.application.voice_service import VoiceConversationService
+from devmate.application.voice_service import VoiceConversationService, VoiceReadCommand
 from devmate.config import AppConfig, config_path, database_path, load_config
 from devmate.domain.ports import SpeechInputProvider
 from devmate.errors import ConfigurationError
@@ -85,6 +85,14 @@ class Runtime:
             conversation,
             inspection_conversation,
             self.reading_service(),
+            tuple(
+                VoiceReadCommand(
+                    phrases=tuple(command.phrases),
+                    path=command.path,
+                    section=command.section,
+                )
+                for command in self.config.voice.commands
+            ),
         )
 
 

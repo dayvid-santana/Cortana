@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import sys
 from collections.abc import Callable
@@ -15,6 +16,7 @@ from rich.table import Table
 
 from devmate import __version__
 from devmate.adapters.hotkey.windows_hotkey import WindowsHotkey
+from devmate.adapters.speech.system_provider import SystemSpeechProvider
 from devmate.application.conversation_service import ConversationService
 from devmate.application.daemon_service import DaemonService
 from devmate.application.doctor_service import doctor
@@ -717,6 +719,82 @@ def providers_doctor(name: str) -> None:
     available, detail = provider.available()
     console.print(
         f"{name}: {'disponível' if available else 'indisponível'} — {detail or 'configurado'}"
+    )
+
+
+@app.command()
+def voices(
+    test: Annotated[
+        bool, typer.Option("--test", help="Narra uma frase com cada voz encontrada.")
+    ] = False,
+    say: Annotated[str | None, typer.Option("--say", help="Frase usada com --test.")] = None,
+    as_json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Lista as vozes do sistema disponíveis para a narração."""
+    runtime = _run(_runtime, as_json)
+    if runtime is None:
+        return
+    provider = SystemSpeechProvider(runtime.config.speech.rate, runtime.config.speech.voice)
+    found = _run(provider.list_voices, as_json)
+    if found is None:
+        return
+    if as_json:
+        typer.echo(json.dumps({"voices": found, "selected": provider.voice}, ensure_ascii=False))
+        return
+    table = Table(title="Vozes do sistema")
+    table.add_column("Voz")
+    table.add_column("Em uso")
+    for name in found:
+        selected = provider.voice is not None and provider.voice.casefold() in name.casefold()
+        table.add_row(name, "sim" if selected else "")
+    console.print(table)
+    if provider.voice is None:
+        console.print("\n[dim]Nenhuma voz fixada; a padrão do sistema é usada.[/dim]")
+    console.print(
+        "\nPara escolher, use um trecho do nome em `.devmate/config.toml`:\n"
+        '  [speech]\n  voice = "Maria"'
+    )
+    if not test:
+        return
+    phrase = say or f"Olá, eu sou a {ASSISTANT_NAME}."
+    for name in found:
+        console.print(f"[cyan]Narrando com:[/cyan] {name}")
+        sample = SystemSpeechProvider(runtime.config.speech.rate, name)
+        _run(functools.partial(sample.speak, phrase))
+
+
+@app.command("commands")
+def voice_commands(as_json: Annotated[bool, typer.Option("--json")] = False) -> None:
+    """Lista os comandos especiais que a Diana reconhece por voz."""
+    runtime = _run(_runtime, as_json)
+    if runtime is None:
+        return
+    commands = runtime.config.voice.commands
+    data = [
+        {
+            "phrases": command.phrases,
+            "action": command.action,
+            "path": command.path,
+            "section": command.section,
+        }
+        for command in commands
+    ]
+    if as_json:
+        typer.echo(json.dumps({"commands": data}, ensure_ascii=False))
+        return
+    table = Table(title="Comandos especiais de voz")
+    table.add_column("Frases")
+    table.add_column("Ação")
+    table.add_column("Destino")
+    for command in commands:
+        destination = command.path
+        if command.section:
+            destination = f"{destination} — {command.section}"
+        table.add_row(", ".join(command.phrases), command.action, destination)
+    console.print(table)
+    console.print(
+        "\n[dim]Edite a seção voice.commands em .devmate/config.toml e reinicie a Diana "
+        "para aplicar alterações.[/dim]"
     )
 
 

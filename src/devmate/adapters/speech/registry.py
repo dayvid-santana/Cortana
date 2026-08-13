@@ -16,7 +16,7 @@ from devmate.errors import ProviderNotFoundError
 def get_speech_provider(name: str, config: AppConfig) -> SpeechProvider:
     providers: dict[str, SpeechProvider] = {
         "null": NullSpeechProvider(),
-        "system": SystemSpeechProvider(config.speech.rate),
+        "system": SystemSpeechProvider(config.speech.rate, config.speech.voice),
     }
     try:
         return providers[name]

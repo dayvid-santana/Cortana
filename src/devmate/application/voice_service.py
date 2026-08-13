@@ -27,13 +27,6 @@ EXIT_PHRASES = frozenset(
     }
 )
 
-README_READ_PHRASES = frozenset(
-    {
-        "leia o documento",
-        "ler o documento",
-    }
-)
-
 
 def _normalize_voice_phrase(transcript: str) -> str:
     decomposed = unicodedata.normalize("NFD", transcript.casefold())
@@ -52,11 +45,6 @@ def is_exit_phrase(transcript: str) -> bool:
     return normalized in EXIT_PHRASES
 
 
-def is_readme_read_phrase(transcript: str) -> bool:
-    """Reconhece a ordem local para narrar o README sem consultar o provider."""
-    return _normalize_voice_phrase(transcript) in README_READ_PHRASES
-
-
 @dataclass(frozen=True, slots=True)
 class VoiceAnswer:
     transcript: str
@@ -72,6 +60,19 @@ class VoiceReading:
 VoiceTurn = VoiceAnswer | VoiceReading
 
 
+@dataclass(frozen=True, slots=True)
+class VoiceReadCommand:
+    """Comando local configurado para narrar um documento Markdown."""
+
+    phrases: tuple[str, ...]
+    path: str
+    section: str | None = None
+
+    def matches(self, transcript: str) -> bool:
+        normalized = _normalize_voice_phrase(transcript)
+        return normalized in {_normalize_voice_phrase(phrase) for phrase in self.phrases}
+
+
 class VoiceConversationService:
     """Mantém áudio local e delega somente texto à conversa existente."""
 
@@ -82,12 +83,14 @@ class VoiceConversationService:
         conversation: ConversationService,
         inspection_conversation: InspectionConversationService | None = None,
         reading: ReadingService | None = None,
+        read_commands: tuple[VoiceReadCommand, ...] = (),
     ) -> None:
         self.input_provider = input_provider
         self.output_provider = output_provider
         self.conversation = conversation
         self.inspection_conversation = inspection_conversation
         self.reading = reading
+        self.read_commands = read_commands
 
     def listen_and_ask(
         self,
@@ -101,7 +104,7 @@ class VoiceConversationService:
         full_repo: bool = False,
     ) -> VoiceTurn:
         transcript = self.input_provider.listen(duration_seconds)
-        reading = self._readme_command(project_id, transcript, speak_response)
+        reading = self._voice_read_command(project_id, transcript, speak_response)
         if reading is not None:
             return VoiceReading(transcript=transcript, result=reading)
         answer = self._answer(
@@ -144,7 +147,7 @@ class VoiceConversationService:
             silent_rounds = 0
             if is_exit_phrase(transcript):
                 return
-            reading = self._readme_command(project_id, transcript, speak_response)
+            reading = self._voice_read_command(project_id, transcript, speak_response)
             if reading is not None:
                 yield VoiceReading(transcript=transcript, result=reading)
                 continue
@@ -155,16 +158,18 @@ class VoiceConversationService:
                 self._speak(answer.response.text)
             yield VoiceAnswer(transcript=transcript, answer=answer)
 
-    def _readme_command(
+    def _voice_read_command(
         self, project_id: int, transcript: str, speak_response: bool
     ) -> ReadingResult | None:
-        if not is_readme_read_phrase(transcript):
+        command = next((item for item in self.read_commands if item.matches(transcript)), None)
+        if command is None:
             return None
         if self.reading is None:
             raise RuntimeError("Leitura por voz não está configurada.")
         return self.reading.read(
             project_id=project_id,
-            requested_path="README.md",
+            requested_path=command.path,
+            section=command.section,
             dry_run=not speak_response,
         )
 

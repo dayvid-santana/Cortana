@@ -5,9 +5,9 @@ from __future__ import annotations
 import os
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from devmate.constants import (
     ASSISTANT_NAME,
@@ -80,10 +80,50 @@ class SecurityConfig(BaseModel):
 class SpeechConfig(BaseModel):
     provider: str = DEFAULT_SPEECH_PROVIDER
     rate: int = Field(default=180, ge=80, le=450)
+    # Trecho do nome da voz do sistema; vazio mantém a voz padrão do SO.
+    voice: str | None = None
     input_provider: str = "faster_whisper"
     input_model: str = "base"
     input_language: str = "pt-BR"
     input_duration_seconds: int = Field(default=10, ge=1, le=60)
+
+
+class VoiceCommandConfig(BaseModel):
+    """Ordem local de voz para narrar um Markdown autorizado."""
+
+    phrases: list[str] = Field(min_length=1)
+    action: Literal["read"] = "read"
+    path: str = Field(min_length=1)
+    section: str | None = None
+
+    @field_validator("phrases")
+    @classmethod
+    def validate_phrases(cls, phrases: list[str]) -> list[str]:
+        if any(not phrase.strip() for phrase in phrases):
+            raise ValueError("As frases de um comando de voz não podem estar vazias.")
+        return phrases
+
+    @field_validator("path")
+    @classmethod
+    def validate_markdown_path(cls, path: str) -> str:
+        if not path.casefold().endswith(".md"):
+            raise ValueError("Comandos de leitura por voz aceitam apenas arquivos Markdown (.md).")
+        return path
+
+
+def _default_voice_commands() -> list[VoiceCommandConfig]:
+    return [
+        VoiceCommandConfig(
+            phrases=["leia o documento", "ler o documento"],
+            path="README.md",
+        )
+    ]
+
+
+class VoiceConfig(BaseModel):
+    """Comandos locais de voz; não chamam providers de linguagem."""
+
+    commands: list[VoiceCommandConfig] = Field(default_factory=_default_voice_commands)
 
 
 class DaemonConfig(BaseModel):
@@ -104,6 +144,7 @@ class AppConfig(BaseModel):
     language_model: LanguageModelConfig = Field(default_factory=LanguageModelConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     speech: SpeechConfig = Field(default_factory=SpeechConfig)
+    voice: VoiceConfig = Field(default_factory=VoiceConfig)
     daemon: DaemonConfig = Field(default_factory=DaemonConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
@@ -136,11 +177,19 @@ DEFAULT_CONFIG_TOML = (
     '"id_ed25519", "credentials*", "secrets*"]\n\n'
     "[speech]\n"
     'provider = "system"\n'
-    "rate = 180\n\n"
+    "rate = 180\n"
+    '# Use `devmate voices` para listar. Um trecho basta, ex.: "Maria".\n'
+    '# voice = "Maria"\n\n'
     'input_provider = "faster_whisper"\n'
     'input_model = "base"\n'
     'input_language = "pt-BR"\n'
     "input_duration_seconds = 10\n\n"
+    "# Acrescente novos blocos para criar comandos de voz locais de leitura.\n"
+    "[[voice.commands]]\n"
+    'phrases = ["leia o documento", "ler o documento"]\n'
+    'action = "read"\n'
+    'path = "README.md"\n'
+    '# section = "Segurança"\n\n'
     "[daemon]\n"
     'hotkey = "ctrl+alt+d"\n'
     "preload_model = true\n\n"

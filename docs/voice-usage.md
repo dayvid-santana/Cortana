@@ -55,11 +55,34 @@ Para encerrar, diga **"sair"**, **"tchau"**, **"encerrar"** ou **"até logo"**, 
 
 As mesmas opções de `listen` valem aqui, incluindo `--duration`, `--no-speak`, `--files` e `--full-repo`.
 
-### Comando curto: ler o documento
+### Comandos de voz configuráveis
 
 Durante `diana` ou `devmate talk`, diga **"Diana, leia o documento"**. A Diana reconhece a frase localmente e narra `README.md` sem enviar esse comando ao Codex. Também é aceita a forma **"ler o documento"**.
 
 Ao terminar, a conversa continua escutando. Diga **"sair"** para encerrar.
+
+Você pode cadastrar outros comandos de leitura no `.devmate/config.toml`. Cada bloco mapeia uma ou mais frases para um Markdown do repositório; a leitura passa pelas mesmas proteções contra caminhos externos, arquivos sensíveis e arquivos grandes:
+
+```toml
+[[voice.commands]]
+phrases = ["leia a arquitetura", "explique a arquitetura"]
+action = "read"
+path = "docs/architecture.md"
+
+[[voice.commands]]
+phrases = ["leia a segurança"]
+action = "read"
+path = "docs/security.md"
+section = "Proteções"
+```
+
+Fale **"Diana, leia a arquitetura"** ou **"Diana, leia a segurança"**. Depois de salvar o arquivo, encerre e inicie a Diana novamente. Para conferir o que está ativo:
+
+```powershell
+diana commands
+```
+
+Nesta versão, os comandos configuráveis executam somente a ação segura `read` e aceitam apenas arquivos Markdown (`.md`). Perguntas livres continuam seguindo para o provider selecionado.
 
 ## Providers de resposta
 
