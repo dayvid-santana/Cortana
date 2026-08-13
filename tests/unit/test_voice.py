@@ -209,7 +209,7 @@ class ReadmeInput:
 
     def listen(self, duration_seconds: int | None = None) -> str:
         assert duration_seconds == 4
-        return "Diana, leia o README.md."
+        return "Diana, leia o documento."
 
 
 class FakeReading:
@@ -242,10 +242,14 @@ def test_regular_questions_are_not_treated_as_exit(phrase: str) -> None:
 
 @pytest.mark.parametrize(
     "phrase",
-    ["leia readme", "Diana, leia o README.md.", "ler o readme"],
+    ["leia o documento", "Diana, leia o documento.", "ler o documento"],
 )
 def test_readme_read_phrases_are_recognized(phrase: str) -> None:
     assert is_readme_read_phrase(phrase)
+
+
+def test_old_readme_voice_phrase_is_not_a_special_command() -> None:
+    assert not is_readme_read_phrase("Diana, leia o README")
 
 
 def test_readme_voice_command_uses_local_reader_without_calling_provider() -> None:

@@ -29,14 +29,8 @@ EXIT_PHRASES = frozenset(
 
 README_READ_PHRASES = frozenset(
     {
-        "leia readme",
-        "leia o readme",
-        "leia readme md",
-        "leia o readme md",
-        "leia read me",
-        "leia o read me",
-        "ler readme",
-        "ler o readme",
+        "leia o documento",
+        "ler o documento",
     }
 )
 
