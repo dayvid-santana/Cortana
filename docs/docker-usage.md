@@ -134,7 +134,37 @@ docker run --rm -it -v "${PWD}:/workspace" -w /workspace devmate:local ask --pro
 
 No PowerShell, `${PWD}` representa o diretório atual. O repositório deve estar disponível ao Docker Desktop para que o bind mount funcione.
 
-## 10. Solução de problemas
+## 10. Conectar com o frontend (devmate-web)
+
+O serviço `backend` do `compose.yaml` sobe a API HTTP (`devmate serve`) para um frontend externo
+consumir — por exemplo o `devmate-web` (projeto irmão, ex.: `../Diana`), que já espera um serviço
+chamado `backend` em `http://backend:8000` na mesma rede Docker.
+
+```powershell
+# 1. Inicialize o estado do repositório (uma vez; fica persistido no volume montado).
+docker compose run --rm devmate init
+docker compose run --rm devmate scan
+
+# 2. Suba a API.
+docker compose up -d backend
+curl http://127.0.0.1:8000/api/v1/health
+```
+
+A rede `devmate-net` tem nome fixo nos dois compose (sem `external: true`): o Compose a cria no
+primeiro `up` de qualquer um dos dois projetos e o outro só se conecta — não precisa rodar
+`docker network create` nem se preocupar com a ordem de início.
+
+No projeto do frontend, suba o serviço `web` (build de produção) ou `dev` (hot-reload) — ambos já
+apontam `DEVMATE_API_PROXY_TARGET` para `http://backend:8000` e entram na mesma rede
+`devmate-net`. Consulte o README do frontend para o comando exato e para `VITE_ENABLE_MOCKS`.
+
+Hoje a API real só implementa `/health`, `/status` e `/chat` (ver `src/devmate/api/app.py`); o
+restante do contrato do frontend (`openapi/devmate.openapi.json`) segue coberto por mocks até
+esses endpoints existirem aqui. `--host 0.0.0.0` no comando do `backend` é seguro porque só a
+porta publicada (`8000:8000`) e a rede Docker ficam expostas — fora de contêiner, prefira sempre
+o padrão `127.0.0.1` do `devmate serve`.
+
+## 12. Solução de problemas
 
 | Sintoma | Ação |
 |---|---|

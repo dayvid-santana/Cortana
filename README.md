@@ -208,6 +208,8 @@ curl -X POST http://127.0.0.1:8000/api/v1/chat \
 
 CORS aceita apenas `http://127.0.0.1:5173`/`http://localhost:5173` (o dev server padrão do Vite); `--host` continua `127.0.0.1` por padrão — não exponha em `0.0.0.0` fora de uma rede confiável. O schema OpenAPI fica disponível em `/openapi.json` para gerar um cliente tipado.
 
+Para subir a API em Docker e um frontend (ex.: `devmate-web`) acessá-la pela rede do Compose, veja [docs/docker-usage.md](docs/docker-usage.md#10-conectar-com-o-frontend-devmate-web).
+
 ## Segurança
 
 - Escopo padrão é `docs`: código só entra em `inspect`, `ask --scope code` ou uma seleção explícita — inclusive pela API. `devmate config full-access --enable` torna esse escopo automático **por projeto**, sem afetar os bloqueios abaixo.

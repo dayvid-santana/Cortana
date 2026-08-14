@@ -10,3 +10,32 @@ services:
       # Mantém código, .git e estado .devmate locais e persistentes no host.
       - .:/workspace
     command: ["--help"]
+
+  # API HTTP para um frontend consumir (ex.: devmate-web, projeto irmão em
+  # ../Diana). Requer `devmate init` (e idealmente `devmate scan`) já rodados
+  # no volume montado — ver docs/docker-usage.md#11-conectar-com-o-frontend.
+  # --host 0.0.0.0 é seguro aqui porque a fronteira de confiança é a rede
+  # Docker + a porta publicada, não o processo em si (fora de contêiner,
+  # prefira sempre o padrão 127.0.0.1 do `devmate serve`).
+  backend:
+    build:
+      context: .
+      target: development
+    working_dir: /workspace
+    environment:
+      PYTHONPATH: /workspace/src
+    volumes:
+      - .:/workspace
+    command: ["serve", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    networks:
+      - devmate-net
+
+networks:
+  # Nome fixo (sem `external: true`) compartilhado com o compose do frontend:
+  # o Compose cria a rede no primeiro `up` de qualquer um dos dois projetos e
+  # o outro só se conecta a ela — não precisa criar nada à mão nem se
+  # preocupar com ordem de início.
+  devmate-net:
+    name: devmate-net
