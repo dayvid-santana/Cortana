@@ -59,3 +59,17 @@ class LocalFilesystem:
             raise FileTooLargeError(f"Arquivo excede o limite de {self.max_file_bytes} bytes.")
         content = path.read_text(encoding="utf-8", errors="replace")
         return path, content, hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    def write_text(self, requested_path: str, content: str) -> Path:
+        """Único ponto de escrita do DevMate: mesmas travas de `resolve`/segredo/tamanho do read."""
+        path = self.resolve(requested_path)
+        if self.is_sensitive(path):
+            raise UnsafePathError(
+                "Arquivos potencialmente sensíveis não podem ser escritos pelo DevMate."
+            )
+        size = len(content.encode("utf-8"))
+        if size > self.max_file_bytes:
+            raise FileTooLargeError(f"Conteúdo excede o limite de {self.max_file_bytes} bytes.")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return path

@@ -87,6 +87,40 @@ devmate ask --provider codex --scope code --full-repo "Como o hook de scan funci
 
 É esse escopo explícito — não a autenticação — que costuma fazer as respostas do Codex parecerem genéricas: sem `--full-repo`/`--files`, ele nunca chega a ver o seu código.
 
+### Acesso total ao código (por projeto)
+
+Se você quer que a Diana sempre trate código como escopo autorizado neste repositório — sem
+repetir `--full-repo`/`--scope code` a cada pergunta —, ative uma vez:
+
+```bash
+devmate config full-access --enable
+devmate ask "o que este módulo faz?"          # já inclui código, sem --scope code
+devmate inspect "isso está consistente com docs/architecture.md?"  # sem --full-repo
+devmate config full-access --disable          # volta ao padrão (docs) quando quiser
+```
+
+Isso grava `[security] default_scope = "code"` em `.devmate/config.toml` **deste** projeto. Os
+bloqueios de segredo, path traversal, symlink externo e o limite de 200 arquivos continuam
+valendo — o que muda é só a necessidade de repetir a autorização a cada chamada.
+
+### Comandos por atividade
+
+Além de `ask`/`inspect`, existem comandos dedicados para o dia a dia de engenharia, todos sobre
+código explicitamente selecionado (`--files`/`--full-repo`, ou automático com `full-access`):
+
+```bash
+devmate review --files src/app.py                       # bugs, segurança, design (read-only)
+devmate architecture --full-repo                         # módulos, dependências, decisões
+devmate docs --files docs/architecture.md --files src/app.py "Atualize este documento"
+devmate refactor --files src/app.py "Extraia essa função em um módulo separado"
+devmate edit --files src/app.py "Adicione validação de entrada nesta função"
+```
+
+`docs`, `refactor` e `edit` **propõem** — a Diana nunca escreve sem revisão. Cada comando mostra
+a explicação e o diff calculado localmente por arquivo; você confirma um a um (ou usa `--yes`
+para aplicar tudo de uma vez). Nada é gravado fora dos arquivos que você mesmo autorizou no
+contexto.
+
 ## Leitura em voz alta
 
 ```bash
@@ -176,11 +210,12 @@ CORS aceita apenas `http://127.0.0.1:5173`/`http://localhost:5173` (o dev server
 
 ## Segurança
 
-- Escopo padrão é `docs`: código só entra em `inspect`, `ask --scope code` ou uma seleção explícita — inclusive pela API.
-- Caminhos, symlinks externos e padrões de segredos são bloqueados antes da leitura.
+- Escopo padrão é `docs`: código só entra em `inspect`, `ask --scope code` ou uma seleção explícita — inclusive pela API. `devmate config full-access --enable` torna esse escopo automático **por projeto**, sem afetar os bloqueios abaixo.
+- Caminhos, symlinks externos e padrões de segredos são bloqueados antes da leitura **e da escrita** (`devmate edit`/`docs`/`refactor`).
 - O conteúdo do repositório é marcado como não confiável nos prompts.
 - Git e TTS usam argumentos explícitos, timeout e nunca `shell=True`.
 - Hooks só executam `scan --metadata-only`; não chamam providers.
+- A escrita em disco é a única exceção ao modo somente leitura: só acontece em `devmate edit/docs/refactor`, um arquivo por vez, com diff calculado localmente e confirmação explícita (ou `--yes`). O provider nunca ganha acesso de escrita — ele só descreve o conteúdo proposto em texto; o Codex continua rodando em sandbox `read_only`.
 - A API nunca recebe nem devolve credenciais; CORS restrito a origens locais conhecidas.
 
 Consulte [o threat model](docs/security.md).
@@ -196,4 +231,7 @@ uv run pytest
 
 ## Limitações do MVP e roadmap
 
-Não há embeddings, banco vetorial, interface web, edição automática, execução de testes por agentes, PDFs nem sincronização em nuvem. Veja [o roadmap](docs/roadmap.md).
+Edição de código existe apenas como proposta revisável (`devmate edit`/`docs`/`refactor`): a
+Diana nunca escreve sem confirmação explícita por arquivo. Não há embeddings, banco vetorial,
+interface web, edição **autônoma** (sem revisão), geração de pull requests, execução de testes
+por agentes, PDFs nem sincronização em nuvem. Veja [o roadmap](docs/roadmap.md).

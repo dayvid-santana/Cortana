@@ -36,6 +36,13 @@ def set_default_provider(path: Path, name: str) -> None:
     _save(path, document)
 
 
+def set_default_scope(path: Path, scope: str) -> None:
+    """Grava ``[security].default_scope`` ("docs" ou "code") no lugar."""
+    document = _load(path)
+    _assign(document, ("security", "default_scope"), scope)
+    _save(path, document)
+
+
 def _load(path: Path) -> tomlkit.TOMLDocument:
     if not path.exists():
         return tomlkit.document()

@@ -19,6 +19,7 @@ from devmate.constants import (
     DEFAULT_PROVIDER,
     DEFAULT_SPEECH_PROVIDER,
 )
+from devmate.domain.enums import Scope
 from devmate.errors import ConfigurationError
 
 
@@ -63,6 +64,11 @@ class SecurityConfig(BaseModel):
     max_file_bytes: int = Field(default=DEFAULT_MAX_FILE_BYTES, gt=0)
     max_diff_chars: int = Field(default=DEFAULT_MAX_DIFF_CHARS, gt=0)
     follow_external_symlinks: bool = False
+    # "docs" (padrão) ou "code": quando "code", ask/inspect/listen/talk tratam código como
+    # escopo autorizado sem exigir --scope code/--full-repo a cada chamada. Opt-in por projeto,
+    # não muda o bloqueio de segredos/paths nem o limite de 200 arquivos. Ver `devmate config
+    # full-access` e docs/security.md.
+    default_scope: Scope = Scope.DOCS
     ignored_patterns: list[str] = Field(
         default_factory=lambda: [
             ".env",
@@ -204,6 +210,10 @@ DEFAULT_CONFIG_TOML = (
     "max_file_bytes = 512000\n"
     "max_diff_chars = 80000\n"
     "follow_external_symlinks = false\n"
+    '# "code" faz ask/inspect/listen/talk tratarem código como escopo autorizado sem exigir\n'
+    "# --scope code/--full-repo a cada chamada. Não muda o bloqueio de segredos/paths.\n"
+    "# Prefira `devmate config full-access --enable` a editar esta linha à mão.\n"
+    '# default_scope = "code"\n'
     'ignored_patterns = [".env", ".env.*", "*.pem", "*.key", "id_rsa", '
     '"id_ed25519", "credentials*", "secrets*"]\n\n'
     "[speech]\n"

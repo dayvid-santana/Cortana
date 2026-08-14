@@ -13,6 +13,7 @@ from devmate.adapters.persistence.repositories import RepositoryStore
 from devmate.adapters.speech.registry import get_speech_input_provider, get_speech_provider
 from devmate.application.context_service import ContextService
 from devmate.application.conversation_service import ConversationService
+from devmate.application.edit_service import EditProposalService
 from devmate.application.inspection_conversation_service import InspectionConversationService
 from devmate.application.inspection_service import InspectionService
 from devmate.application.instance_lock import InstanceLock
@@ -69,6 +70,9 @@ class Runtime:
 
     def inspection_service(self) -> InspectionService:
         return InspectionService(self.filesystem, self.context_service(), self.store)
+
+    def edit_service(self) -> EditProposalService:
+        return EditProposalService(self.inspection_service(), self.filesystem, self.providers)
 
     def speech_provider(
         self, provider_name: str | None = None, voice: str | None = None

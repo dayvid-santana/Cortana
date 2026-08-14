@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from devmate.config import DEFAULT_CONFIG_TOML, AppConfig
 from devmate.constants import ASSISTANT_NAME
+from devmate.domain.enums import Scope
 
 
 def test_default_config_exposes_the_assistant_instruction_for_codex() -> None:
@@ -55,6 +56,18 @@ def test_voice_commands_reject_non_markdown_targets() -> None:
         AppConfig.model_validate(
             {"voice": {"commands": [{"phrases": ["leia o código"], "path": "src/app.py"}]}}
         )
+
+
+def test_default_scope_is_docs() -> None:
+    config = AppConfig.model_validate(tomllib.loads(DEFAULT_CONFIG_TOML))
+
+    assert config.security.default_scope is Scope.DOCS
+
+
+def test_default_scope_can_be_set_to_code() -> None:
+    config = AppConfig.model_validate({"security": {"default_scope": "code"}})
+
+    assert config.security.default_scope is Scope.CODE
 
 
 def test_voice_help_command_needs_no_document_path() -> None:

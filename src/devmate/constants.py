@@ -12,3 +12,4 @@ DEFAULT_SPEECH_PROVIDER = "system"
 DEFAULT_MAX_FILE_BYTES = 512_000
 DEFAULT_MAX_DIFF_CHARS = 80_000
 PROMPT_VERSION = "v1"
+SOURCE_FILE_EXTENSIONS = frozenset({".py", ".js", ".ts", ".tsx", ".go", ".java", ".rs", ".rb"})

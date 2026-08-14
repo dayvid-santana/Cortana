@@ -28,17 +28,19 @@ from devmate.application.codex_connection_service import (
 from devmate.application.conversation_service import ConversationService
 from devmate.application.daemon_service import DaemonService
 from devmate.application.doctor_service import doctor
+from devmate.application.edit_service import EditProposal, ProposedFileChange
 from devmate.application.hooks_service import hook_installed, install_hook, uninstall_hook
-from devmate.application.inspection_service import InspectionContext
 from devmate.application.project_service import initialize_project
 from devmate.application.voice_service import VoiceHelp, VoiceReading
 from devmate.bootstrap import Runtime, load_runtime
-from devmate.config_writer import set_default_provider
+from devmate.config_writer import set_default_provider, set_default_scope
 from devmate.constants import ASSISTANT_NAME
 from devmate.domain.enums import Scope
 from devmate.domain.models import LLMRequest
 from devmate.errors import DevMateError, ProviderUnavailableError
 from devmate.logging import configure_logging
+from devmate.prompts.activities import ARCHITECTURE_SYSTEM, CODE_REVIEW_SYSTEM
+from devmate.prompts.code_edit import CODE_EDIT_SYSTEM, DOCS_GENERATION_SYSTEM, REFACTOR_SYSTEM
 from devmate.prompts.code_inspection import CODE_INSPECTION_SYSTEM
 
 app = typer.Typer(
@@ -86,6 +88,11 @@ def _ensure_indexed(runtime: Runtime, commit: str | None = None) -> None:
 
 def _answer_data(commit: str, text: str) -> dict[str, str]:
     return {"commit": commit, "answer": text}
+
+
+def _effective_full_repo(runtime: Runtime, files: list[str] | None, full_repo: bool) -> bool:
+    """Aplica o opt-in de `[security] default_scope = "code"` quando nada foi passado à mão."""
+    return full_repo or (not files and runtime.config.security.default_scope is Scope.CODE)
 
 
 @app.callback()
@@ -197,6 +204,7 @@ def status(as_json: Annotated[bool, typer.Option("--json")] = False) -> None:
             "active_decisions": len(runtime.store.decisions(project_id, active_only=True)),
             "open_questions": len(runtime.store.questions(project_id, open_only=True)),
             "provider": runtime.config.provider.default,
+            "code_scope": runtime.config.security.default_scope.value,
             "speech_provider": runtime.config.speech.provider,
             "database": str(runtime.root / ".devmate" / "state.db"),
             "hook": hook_installed(runtime.git.common_dir()),
@@ -222,13 +230,23 @@ def ask(
     provider: Annotated[str | None, typer.Option("--provider")] = None,
     commit: Annotated[str | None, typer.Option("--commit")] = None,
     model: Annotated[str | None, typer.Option("--model")] = None,
-    scope: Annotated[Scope, typer.Option("--scope")] = Scope.DOCS,
+    scope: Annotated[
+        Scope | None,
+        typer.Option(
+            "--scope",
+            help="docs ou code; sem informar, usa [security] default_scope do projeto (docs).",
+        ),
+    ] = None,
     files: Annotated[list[str] | None, typer.Option("--files")] = None,
     full_repo: Annotated[bool, typer.Option("--full-repo")] = False,
     as_json: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
     """Faz uma pergunta sobre a documentação do commit indexado."""
-    if scope is Scope.CODE:
+    runtime = _run(_runtime, as_json)
+    if runtime is None:
+        return
+    effective_scope = scope or runtime.config.security.default_scope
+    if effective_scope is Scope.CODE:
         inspect(
             question,
             commit=commit,
@@ -238,9 +256,6 @@ def ask(
             full_repo=full_repo or not files,
             as_json=as_json,
         )
-        return
-    runtime = _run(_runtime, as_json)
-    if runtime is None:
         return
     _ensure_indexed(runtime, commit)
     answer = _run(
@@ -330,8 +345,9 @@ def listen(
     if runtime is None:
         return
     _ensure_indexed(runtime, commit)
+    effective_full_repo = _effective_full_repo(runtime, files, full_repo)
     seconds = duration or runtime.config.speech.input_duration_seconds
-    scope_message = "com código selecionado" if files or full_repo else "com documentação"
+    scope_message = "com código selecionado" if files or effective_full_repo else "com documentação"
     console.print(f"[cyan]Ouvindo por até {seconds} segundos ({scope_message}). Fale agora.[/cyan]")
     result = _run(
         lambda: runtime.voice_service().listen_and_ask(
@@ -342,7 +358,7 @@ def listen(
             duration_seconds=duration,
             speak_response=not no_speak,
             code_files=files,
-            full_repo=full_repo,
+            full_repo=effective_full_repo,
         ),
         as_json,
     )
@@ -414,8 +430,9 @@ def talk(
     if runtime is None:
         return
     _ensure_indexed(runtime, commit)
+    effective_full_repo = _effective_full_repo(runtime, files, full_repo)
     seconds = duration or runtime.config.speech.input_duration_seconds
-    scope_message = "com código selecionado" if files or full_repo else "com documentação"
+    scope_message = "com código selecionado" if files or effective_full_repo else "com documentação"
     console.print(
         f"[bold]{ASSISTANT_NAME}[/bold] está ouvindo {scope_message}, "
         f"{seconds}s por rodada.\n"
@@ -431,7 +448,7 @@ def talk(
             duration_seconds=duration,
             speak_response=not no_speak,
             code_files=files,
-            full_repo=full_repo,
+            full_repo=effective_full_repo,
             on_notice=lambda message: console.print(f"[yellow]{message}[/yellow]"),
         )
 
@@ -537,6 +554,52 @@ def daemon(
     console.print("[dim]Diana encerrada.[/dim]")
 
 
+def _run_readonly_code_task(
+    runtime: Runtime,
+    *,
+    commit: str | None,
+    files: list[str] | None,
+    full_repo: bool,
+    provider: str | None,
+    model: str | None,
+    question: str,
+    system_instructions: str,
+    task: str,
+    title: str,
+    as_json: bool,
+) -> None:
+    """Contexto -> provider -> impressão, compartilhado por inspect/review/architecture."""
+    _ensure_indexed(runtime, commit)
+    context = _run(
+        lambda: runtime.inspection_service().build(
+            runtime.project_id, commit, files or [], _effective_full_repo(runtime, files, full_repo)
+        ),
+        as_json,
+    )
+    if context is None:
+        return
+    response = _run(
+        lambda: runtime.providers.get(provider or runtime.config.provider.default).complete(
+            LLMRequest(
+                task=task,
+                question=question,
+                scope=Scope.CODE,
+                chunks=context.chunks,
+                system_instructions=system_instructions,
+                model=model,
+            )
+        ),
+        as_json,
+    )
+    if response is None:
+        return
+    data = _answer_data(context.commit_hash, response.text)
+    if as_json:
+        typer.echo(json.dumps(data, ensure_ascii=False))
+    else:
+        console.print(f"[bold]{title} — {context.commit_hash[:7]}[/bold]\n\n{response.text}")
+
+
 @app.command()
 def inspect(
     question: str,
@@ -551,43 +614,271 @@ def inspect(
     runtime = _run(_runtime, as_json)
     if runtime is None:
         return
+    _run_readonly_code_task(
+        runtime,
+        commit=commit,
+        files=files,
+        full_repo=full_repo,
+        provider=provider,
+        model=model,
+        question=question,
+        system_instructions=CODE_INSPECTION_SYSTEM,
+        task="code_inspection",
+        title="Inspeção read-only",
+        as_json=as_json,
+    )
+
+
+@app.command()
+def review(
+    question: Annotated[
+        str,
+        typer.Argument(
+            help="Foco da revisão; padrão cobre bugs, segurança e design.",
+        ),
+    ] = "Revise este código em busca de bugs, riscos de segurança e problemas de design. "
+    "Aponte arquivo e linha quando possível.",
+    commit: Annotated[str | None, typer.Option("--commit")] = None,
+    files: Annotated[list[str] | None, typer.Option("--files")] = None,
+    provider: Annotated[str | None, typer.Option("--provider")] = None,
+    model: Annotated[str | None, typer.Option("--model")] = None,
+    full_repo: Annotated[bool, typer.Option("--full-repo")] = False,
+    as_json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Revisão read-only de código explicitamente selecionado: bugs, segurança e design."""
+    runtime = _run(_runtime, as_json)
+    if runtime is None:
+        return
+    _run_readonly_code_task(
+        runtime,
+        commit=commit,
+        files=files,
+        full_repo=full_repo,
+        provider=provider,
+        model=model,
+        question=question,
+        system_instructions=CODE_REVIEW_SYSTEM,
+        task="code_review",
+        title="Revisão de código",
+        as_json=as_json,
+    )
+
+
+@app.command()
+def architecture(
+    question: Annotated[
+        str,
+        typer.Argument(
+            help="Pergunta sobre a arquitetura; padrão pede uma visão geral.",
+        ),
+    ] = "Explique a arquitetura deste código: módulos, fluxo de dependências e decisões de "
+    "design relevantes.",
+    commit: Annotated[str | None, typer.Option("--commit")] = None,
+    files: Annotated[list[str] | None, typer.Option("--files")] = None,
+    provider: Annotated[str | None, typer.Option("--provider")] = None,
+    model: Annotated[str | None, typer.Option("--model")] = None,
+    full_repo: Annotated[bool, typer.Option("--full-repo")] = False,
+    as_json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Explica a arquitetura do código explicitamente selecionado, sem alterar nada."""
+    runtime = _run(_runtime, as_json)
+    if runtime is None:
+        return
+    _run_readonly_code_task(
+        runtime,
+        commit=commit,
+        files=files,
+        full_repo=full_repo,
+        provider=provider,
+        model=model,
+        question=question,
+        system_instructions=ARCHITECTURE_SYSTEM,
+        task="architecture_overview",
+        title="Visão de arquitetura",
+        as_json=as_json,
+    )
+
+
+def _print_edit_proposal(proposal: EditProposal) -> None:
+    console.print(f"[bold]{ASSISTANT_NAME}:[/bold] {proposal.narrative}\n")
+    for change in proposal.changes:
+        console.print(f"[bold]--- {change.path}[/bold]")
+        console.print(change.diff or "[dim](sem diferenças)[/dim]")
+        console.print()
+
+
+def _apply_change(runtime: Runtime, change: ProposedFileChange) -> str:
+    runtime.filesystem.write_text(change.path, change.proposed)
+    return change.path
+
+
+def _run_edit_task(
+    runtime: Runtime,
+    *,
+    commit: str | None,
+    files: list[str] | None,
+    full_repo: bool,
+    provider: str | None,
+    model: str | None,
+    question: str,
+    system_instructions: str,
+    task: str,
+    yes: bool,
+    as_json: bool,
+) -> None:
+    """Contexto -> proposta -> diff -> confirmação -> escrita; sem prompts em --json."""
     _ensure_indexed(runtime, commit)
-    context = _run(
-        lambda: runtime.inspection_service().build(
-            runtime.project_id, commit, files or [], full_repo
+    proposal = _run(
+        lambda: runtime.edit_service().propose(
+            runtime.project_id,
+            question,
+            provider or runtime.config.provider.default,
+            commit,
+            files or [],
+            _effective_full_repo(runtime, files, full_repo),
+            model,
+            system_instructions,
+            task,
         ),
         as_json,
     )
-    if context is None:
+    if proposal is None:
         return
-    response = _run(lambda: _inspect_response(runtime, context, question, provider, model), as_json)
-    if response is None:
-        return
-    data = _answer_data(context.commit_hash, response.text)
+    changed = [change for change in proposal.changes if change.changed]
     if as_json:
-        typer.echo(json.dumps(data, ensure_ascii=False))
-    else:
-        console.print(
-            f"[bold]Inspeção read-only — {context.commit_hash[:7]}[/bold]\n\n{response.text}"
+        if not yes:
+            typer.echo(
+                json.dumps(
+                    {
+                        "commit": proposal.commit_hash,
+                        "narrative": proposal.narrative,
+                        "proposed": [
+                            {"path": change.path, "diff": change.diff} for change in changed
+                        ],
+                        "applied": [],
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return
+        applied = [
+            _run(functools.partial(_apply_change, runtime, change), as_json) for change in changed
+        ]
+        typer.echo(
+            json.dumps(
+                {
+                    "commit": proposal.commit_hash,
+                    "narrative": proposal.narrative,
+                    "applied": [path for path in applied if path is not None],
+                },
+                ensure_ascii=False,
+            )
         )
+        return
+    _print_edit_proposal(proposal)
+    if not changed:
+        return
+    for change in changed:
+        if yes or typer.confirm(f"Aplicar alteração em {change.path}?", default=False):
+            _run(functools.partial(_apply_change, runtime, change))
+            console.print(f"[green]Aplicado: {change.path}[/green]\n")
+        else:
+            console.print(f"[yellow]Ignorado: {change.path}[/yellow]\n")
 
 
-def _inspect_response(
-    runtime: Runtime,
-    context: InspectionContext,
+@app.command()
+def edit(
     question: str,
-    provider: str | None,
-    model: str | None,
-) -> Any:
-    return runtime.providers.get(provider or runtime.config.provider.default).complete(
-        LLMRequest(
-            task="code_inspection",
-            question=question,
-            scope=Scope.CODE,
-            chunks=context.chunks,
-            system_instructions=CODE_INSPECTION_SYSTEM,
-            model=model,
-        )
+    commit: Annotated[str | None, typer.Option("--commit")] = None,
+    files: Annotated[list[str] | None, typer.Option("--files")] = None,
+    full_repo: Annotated[bool, typer.Option("--full-repo")] = False,
+    provider: Annotated[str | None, typer.Option("--provider")] = None,
+    model: Annotated[str | None, typer.Option("--model")] = None,
+    yes: Annotated[
+        bool, typer.Option("--yes", help="Aplica as alterações sem confirmar arquivo por arquivo.")
+    ] = False,
+    as_json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Propõe uma alteração de código sobre arquivos autorizados; nada é escrito sem confirmação."""
+    runtime = _run(_runtime, as_json)
+    if runtime is None:
+        return
+    _run_edit_task(
+        runtime,
+        commit=commit,
+        files=files,
+        full_repo=full_repo,
+        provider=provider,
+        model=model,
+        question=question,
+        system_instructions=CODE_EDIT_SYSTEM,
+        task="code_edit",
+        yes=yes,
+        as_json=as_json,
+    )
+
+
+@app.command()
+def docs(
+    question: str,
+    commit: Annotated[str | None, typer.Option("--commit")] = None,
+    files: Annotated[list[str] | None, typer.Option("--files")] = None,
+    full_repo: Annotated[bool, typer.Option("--full-repo")] = False,
+    provider: Annotated[str | None, typer.Option("--provider")] = None,
+    model: Annotated[str | None, typer.Option("--model")] = None,
+    yes: Annotated[
+        bool, typer.Option("--yes", help="Aplica as alterações sem confirmar arquivo por arquivo.")
+    ] = False,
+    as_json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Gera ou atualiza documentação a partir do código selecionado; requer confirmação."""
+    runtime = _run(_runtime, as_json)
+    if runtime is None:
+        return
+    _run_edit_task(
+        runtime,
+        commit=commit,
+        files=files,
+        full_repo=full_repo,
+        provider=provider,
+        model=model,
+        question=question,
+        system_instructions=DOCS_GENERATION_SYSTEM,
+        task="docs_generation",
+        yes=yes,
+        as_json=as_json,
+    )
+
+
+@app.command()
+def refactor(
+    question: str,
+    commit: Annotated[str | None, typer.Option("--commit")] = None,
+    files: Annotated[list[str] | None, typer.Option("--files")] = None,
+    full_repo: Annotated[bool, typer.Option("--full-repo")] = False,
+    provider: Annotated[str | None, typer.Option("--provider")] = None,
+    model: Annotated[str | None, typer.Option("--model")] = None,
+    yes: Annotated[
+        bool, typer.Option("--yes", help="Aplica as alterações sem confirmar arquivo por arquivo.")
+    ] = False,
+    as_json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Propõe uma refatoração guiada sobre arquivos autorizados; requer confirmação."""
+    runtime = _run(_runtime, as_json)
+    if runtime is None:
+        return
+    _run_edit_task(
+        runtime,
+        commit=commit,
+        files=files,
+        full_repo=full_repo,
+        provider=provider,
+        model=model,
+        question=question,
+        system_instructions=REFACTOR_SYSTEM,
+        task="refactor",
+        yes=yes,
+        as_json=as_json,
     )
 
 
@@ -1278,6 +1569,38 @@ def config_validate() -> None:
     runtime = _run(_runtime)
     if runtime:
         console.print("Configuração válida.")
+
+
+@config_app.command("full-access")
+def config_full_access(
+    enable: Annotated[
+        bool,
+        typer.Option(
+            "--enable/--disable",
+            help="Ativa ou desativa o escopo de código automático (default_scope) do projeto.",
+        ),
+    ] = True,
+) -> None:
+    """Liga/desliga o escopo de código automático deste projeto (grava default_scope no TOML).
+
+    Com --enable, ask/inspect/review/architecture/edit/docs/refactor/listen/talk passam a tratar
+    código como escopo autorizado sem exigir --scope code/--full-repo a cada chamada. Segredos,
+    paths sensíveis e o limite de 200 arquivos continuam bloqueados normalmente.
+    """
+    runtime = _run(_runtime)
+    if runtime is None:
+        return
+    config_path_ = runtime.root / ".devmate" / "config.toml"
+    scope = Scope.CODE.value if enable else Scope.DOCS.value
+    _run(functools.partial(set_default_scope, config_path_, scope))
+    if enable:
+        console.print(
+            "[green]Acesso a código ativado para este projeto.[/green] Os comandos de código "
+            "não vão mais exigir --full-repo/--scope code (segredos e paths sensíveis continuam "
+            "bloqueados)."
+        )
+    else:
+        console.print("[green]Escopo padrão restaurado para docs neste projeto.[/green]")
 
 
 def main() -> None:

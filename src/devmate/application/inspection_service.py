@@ -9,10 +9,9 @@ from pathlib import Path
 from devmate.adapters.filesystem.local_filesystem import LocalFilesystem
 from devmate.adapters.persistence.repositories import RepositoryStore
 from devmate.application.context_service import ContextService
+from devmate.constants import SOURCE_FILE_EXTENSIONS
 from devmate.domain.models import ContextChunk
 from devmate.errors import UnsafePathError
-
-_SOURCE_EXTENSIONS = frozenset({".py", ".js", ".ts", ".tsx", ".go", ".java", ".rs", ".rb"})
 
 # Diretórios de dependências, cache e build nunca são código do projeto; incluí-los
 # facilmente estoura o limite de 200 arquivos (um .venv sozinho já tem milhares de .py).
@@ -29,6 +28,10 @@ def _is_excluded_directory(name: str) -> bool:
 class InspectionContext:
     commit_hash: str
     chunks: tuple[ContextChunk, ...]
+    # Pares (caminho relativo, conteúdo no commit) dos arquivos de código explicitamente
+    # selecionados — não inclui os documentos trazidos como contexto. É a lista de
+    # autorização usada por EditProposalService para aceitar uma proposta de escrita.
+    code_files: tuple[tuple[str, str], ...] = ()
 
 
 class InspectionService:
@@ -59,7 +62,9 @@ class InspectionService:
             content = self.context.git.file_at_commit(commit.commit_hash, relative)
             code.append((relative, content))
         return InspectionContext(
-            commit.commit_hash, docs + self.context.code_chunks(commit.commit_hash, code)
+            commit.commit_hash,
+            docs + self.context.code_chunks(commit.commit_hash, code),
+            code_files=tuple(code),
         )
 
     def _source_files(self) -> list[str]:
@@ -72,7 +77,7 @@ class InspectionService:
             ]
             for file_name in file_names:
                 path = Path(current_root) / file_name
-                if path.suffix.lower() not in _SOURCE_EXTENSIONS:
+                if path.suffix.lower() not in SOURCE_FILE_EXTENSIONS:
                     continue
                 if self.filesystem.is_sensitive(path):
                     continue

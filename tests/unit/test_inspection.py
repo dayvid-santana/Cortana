@@ -31,6 +31,7 @@ def test_inspection_reads_only_explicit_code_at_selected_commit(git_repo: Path) 
     assert "AUTH = 'jwt'" in next(
         chunk.text for chunk in context.chunks if chunk.reference.path == "src/app.py"
     )
+    assert context.code_files == (("src/app.py", "AUTH = 'jwt'\n"),)
 
 
 def _filesystem(root: Path) -> LocalFilesystem:
