@@ -89,15 +89,23 @@ class CodexProvider:
                         cwd=str(workspace),
                         developer_instructions=(
                             f"{self.system_instruction}\n\n"
-                            "Leia somente context.md e, se necessário, os arquivos em "
-                            "selected_context. Eles contêm exclusivamente o contexto já "
-                            "autorizado. Não execute comandos, "
-                            "não modifique arquivos e não acesse outros caminhos."
+                            "O contexto completo e a pergunta já estão na mensagem do usuário "
+                            "desta thread — responda a partir dela diretamente, sem precisar "
+                            "abrir nenhum arquivo. context.md e, se houver, selected_context/ "
+                            "neste workspace são apenas uma cópia de apoio do mesmo conteúdo, "
+                            "não uma fonte adicional. Não execute comandos, não modifique "
+                            "arquivos e não acesse outros caminhos."
                         ),
                     )
+                    # O conteúdo vai embutido na própria mensagem — pedir para o Codex "ir lá
+                    # ler o arquivo" em vez disso é não confiável: em parte das execuções ele
+                    # responde como um chat comum, dizendo não ter acesso ao arquivo, mesmo
+                    # com o sandbox liberado para leitura.
                     result = thread.run(
-                        "Analyze only context.md and answer the contained user question. "
-                        "Do not run commands or alter files.",
+                        f"{prompt}\n\n"
+                        "Responda somente à pergunta da pessoa usuária acima, com base no "
+                        "contexto já incluído nesta mensagem. Não execute comandos e não "
+                        "altere arquivos.",
                         sandbox=Sandbox.read_only,
                         cwd=str(workspace),
                     )

@@ -16,8 +16,10 @@ class FakeResult:
 class FakeThread:
     def __init__(self) -> None:
         self.sandbox: Sandbox | None = None
+        self.prompt: str = ""
 
-    def run(self, _prompt: str, **kwargs: object) -> FakeResult:
+    def run(self, prompt: str, **kwargs: object) -> FakeResult:
+        self.prompt = prompt
         self.sandbox = kwargs["sandbox"]  # type: ignore[assignment]
         return FakeResult()
 
@@ -62,3 +64,8 @@ def test_codex_provider_starts_and_runs_read_only_thread() -> None:
     assert "Instrução da Diana." in str(fake.started_with["developer_instructions"])
     assert fake.thread.sandbox is Sandbox.read_only
     assert "x = 1" in captured["source"]
+    # The rendered context + question must be embedded directly in the message sent to
+    # thread.run(), not just referenced by filename — Codex has repeatedly answered as
+    # though it had no file access when only told "go read context.md yourself".
+    assert "Verifique." in fake.thread.prompt
+    assert "x = 1" in fake.thread.prompt

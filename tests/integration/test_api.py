@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import json
+import socket
 import sqlite3
 import subprocess
+import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
+import httpx
 import pytest
+import uvicorn
 from fastapi.testclient import TestClient
 
 from devmate.api.app import _system_instructions, app
@@ -191,39 +198,157 @@ def test_web_projects_register_and_expose_real_files(
     assert content.json()["path"] == files[0]["path"]
 
 
+@contextmanager
+def _live_server() -> Iterator[str]:
+    """A real uvicorn server on a real socket, for the two SSE tests below.
+
+    stream_run_events's response body deliberately never ends on its own once a run
+    finishes (see that function's docstring-equivalent comment) — a real EventSource
+    closes it client-side instead. FastAPI's in-process TestClient hangs on that: its
+    `.stream()` doesn't hand back control until the ASGI app's request-handling task
+    fully finishes, which for this endpoint only happens when the client disconnects —
+    a chicken-and-egg wait TestClient never resolves. A real socket doesn't have that
+    problem: closing the httpx connection actually severs it, which is exactly the
+    "client disconnects" case this endpoint relies on to eventually stop.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+
+    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="critical")
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    try:
+        base_url = f"http://127.0.0.1:{port}"
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            try:
+                if httpx.get(f"{base_url}/api/v1/health", timeout=0.2).status_code == 200:
+                    break
+            except httpx.HTTPError:
+                pass
+            time.sleep(0.05)
+        else:
+            raise RuntimeError("Live test server did not become healthy in time.")
+        yield base_url
+    finally:
+        server.should_exit = True
+        thread.join(timeout=5)
+
+
+def _read_until_run_completed(response: httpx.Response) -> str:
+    """The stream deliberately never ends on its own once a run finishes (see
+    stream_run_events) — a real EventSource client closes it after processing
+    run.completed, so tests must read incrementally and stop there too, instead of
+    waiting for a natural EOF that no longer comes."""
+    lines: list[str] = []
+    saw_completed = False
+    for line in response.iter_lines():
+        lines.append(line)
+        if saw_completed:
+            break  # this is the data: line belonging to the run.completed frame
+        if line == "event: run.completed":
+            saw_completed = True
+    return "\n".join(lines)
+
+
+def _extract_event_data(payload: str, event_type: str) -> dict[str, object]:
+    lines = payload.splitlines()
+    for index, line in enumerate(lines):
+        if line == f"event: {event_type}":
+            data_line = lines[index + 1]
+            parsed = json.loads(data_line.removeprefix("data: "))
+            assert isinstance(parsed, dict)
+            return parsed
+    raise AssertionError(f"event {event_type} not found in payload")
+
+
 def test_web_chat_run_streams_events_and_persists_the_final_message(
     git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("devmate.api.app.projects", ProjectRegistry(tmp_path / "projects.json"))
-    client = TestClient(app)
-    project = client.post("/api/v1/projects", json={"path": str(git_repo)}).json()
+    with _live_server() as base_url, httpx.Client(base_url=base_url) as client:
+        project = client.post("/api/v1/projects", json={"path": str(git_repo)}).json()
 
-    created = client.post(
-        f"/api/v1/projects/{project['id']}/chat/runs",
-        json={
-            "message": "O que mudou?",
-            "scope": "docs",
-            "commitHash": project["activeCommitHash"],
-            "provider": "mock",
-        },
-    )
+        created = client.post(
+            f"/api/v1/projects/{project['id']}/chat/runs",
+            json={
+                "message": "O que mudou?",
+                "scope": "docs",
+                "commitHash": project["activeCommitHash"],
+                "provider": "mock",
+            },
+        )
 
-    assert created.status_code == 202, created.text
-    run = created.json()
-    assert run["status"] == "queued"
-    with client.stream("GET", f"/api/v1/runs/{run['id']}/events") as response:
-        payload = b"".join(response.iter_bytes()).decode()
-    assert response.status_code == 200
-    assert "event: run.started" in payload
-    assert "event: assistant.delta" in payload
-    assert "event: source.reference" in payload
-    assert "event: run.completed" in payload
+        assert created.status_code == 202, created.text
+        run = created.json()
+        assert run["status"] == "queued"
+        with client.stream("GET", f"/api/v1/runs/{run['id']}/events") as response:
+            assert response.status_code == 200
+            payload = _read_until_run_completed(response)
+        assert "event: run.started" in payload
+        assert "event: assistant.delta" in payload
+        assert "event: source.reference" in payload
+        assert "event: run.completed" in payload
 
-    messages = client.get(
-        f"/api/v1/projects/{project['id']}/threads/{run['threadId']}/messages"
-    ).json()["items"]
-    assert [message["role"] for message in messages] == ["user", "assistant"]
+        # Regression: run.completed used to omit `message` entirely. The frontend's
+        # onEvent handler reads event.message.threadId to invalidate the messages
+        # query — without this field it throws there, and the answer never reaches
+        # the transcript even though it was correctly persisted.
+        completed = _extract_event_data(payload, "run.completed")
+        assert completed["message"]["threadId"] == run["threadId"]  # type: ignore[index]
+        assert completed["message"]["role"] == "assistant"  # type: ignore[index]
+        assert completed["message"]["content"]  # type: ignore[index]
+
+        messages = client.get(
+            f"/api/v1/projects/{project['id']}/threads/{run['threadId']}/messages"
+        ).json()["items"]
+        assert [message["role"] for message in messages] == ["user", "assistant"]
     assert messages[-1]["status"] == "complete"
+
+
+def test_web_chat_run_events_resume_from_last_event_id_without_losing_events(
+    git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reconnecting EventSource sends back Last-Event-ID; the server must replay from
+    there instead of restarting at 0 — and must not have silently dropped events a
+    now-dead earlier connection had already pulled off a (formerly) consumable queue."""
+    monkeypatch.setattr("devmate.api.app.projects", ProjectRegistry(tmp_path / "projects.json"))
+    with _live_server() as base_url, httpx.Client(base_url=base_url) as client:
+        project = client.post("/api/v1/projects", json={"path": str(git_repo)}).json()
+
+        created = client.post(
+            f"/api/v1/projects/{project['id']}/chat/runs",
+            json={
+                "message": "O que mudou?",
+                "scope": "docs",
+                "commitHash": project["activeCommitHash"],
+                "provider": "mock",
+            },
+        )
+        run = created.json()
+
+        first_ids: list[int] = []
+        with client.stream("GET", f"/api/v1/runs/{run['id']}/events") as response:
+            for line in response.iter_lines():
+                if line.startswith("id: "):
+                    first_ids.append(int(line.removeprefix("id: ")))
+                if len(first_ids) >= 2:
+                    break
+
+        assert first_ids == [0, 1]
+
+        with client.stream(
+            "GET",
+            f"/api/v1/runs/{run['id']}/events",
+            headers={"Last-Event-ID": str(first_ids[-1])},
+        ) as response:
+            payload = _read_until_run_completed(response)
+
+    assert "id: 0" not in payload.splitlines()
+    assert "id: 1" not in payload.splitlines()
+    assert "event: run.completed" in payload
 
 
 def test_web_chat_run_can_be_cancelled_before_provider_execution(

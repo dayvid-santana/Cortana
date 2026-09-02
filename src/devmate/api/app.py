@@ -12,7 +12,6 @@ import time
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from queue import Empty, Queue
 from threading import Event, Lock, Thread
 from typing import Any, cast
 from uuid import uuid4
@@ -456,7 +455,13 @@ def create_chat_run(project_id: str, body: dict[str, object]) -> dict[str, str]:
         "id": run_id,
         "threadId": thread_id,
         "status": "queued",
-        "events": Queue(),
+        # Append-only log, not a consumable queue: a reconnecting EventSource opens a
+        # second GET to the same run, and a destructive queue.get() would split events
+        # between whichever connection happened to win each item, silently dropping the
+        # ones delivered to a connection that then failed. A log lets every connection
+        # replay from the index it already has (see stream_run_events's Last-Event-ID).
+        "events": [],
+        "events_lock": Lock(),
         "cancelled": Event(),
         "terminal": Event(),
     }
@@ -472,8 +477,10 @@ def create_chat_run(project_id: str, body: dict[str, object]) -> dict[str, str]:
 
 
 def _emit(state: dict[str, Any], event: dict[str, object]) -> None:
-    """Enfileira eventos para SSE; o produtor nunca escreve diretamente no socket."""
-    cast(Queue[dict[str, object]], state["events"]).put(event)
+    """Acrescenta ao log do run; cada conexão SSE (inicial ou reconexão) faz polling
+    e lê o log a partir do índice que já recebeu — ver stream_run_events."""
+    with cast(Lock, state["events_lock"]):
+        cast(list[dict[str, object]], state["events"]).append(event)
 
 
 def _execute_chat_run(
@@ -524,16 +531,52 @@ def _execute_chat_run(
             )
         for source in sources:
             _emit(state, {"type": "source.reference", "runId": run_id, "source": source})
+        message_id = uuid4().hex
+        thread_id = cast(str, state["threadId"])
+        created_at = datetime.now(UTC).isoformat()
         runtime.store.add_web_message(
-            uuid4().hex, cast(str, state["threadId"]), "assistant", result.response.text,
+            message_id, thread_id, "assistant", result.response.text,
             scope, "complete", provider, None, json.dumps(sources),
         )
         state["status"] = "completed"
-        _emit(state, {"type": "run.completed", "runId": run_id})
+        # The frontend's contract (RunEvent's run.completed) requires the persisted
+        # message here — without it, use-chat-run.ts's onEvent throws reading
+        # event.message.threadId, which silently aborts the messages-query
+        # invalidation that follows it, so the answer never appears in the transcript
+        # even though it was correctly saved.
+        _emit(
+            state,
+            {
+                "type": "run.completed",
+                "runId": run_id,
+                "message": {
+                    "id": message_id,
+                    "threadId": thread_id,
+                    "role": "assistant",
+                    "content": result.response.text,
+                    "createdAt": created_at,
+                    "scope": scope,
+                    "provider": provider,
+                    "model": None,
+                    "sources": sources,
+                    "status": "complete",
+                },
+            },
+        )
     except DevMateError as exc:
         if not cancelled.is_set():
             state["status"] = "failed"
-            _emit(state, {"type": "run.failed", "runId": run_id, "error": str(exc)})
+            # The frontend's contract expects `error` shaped like ApiProblem
+            # ({title, status, detail}), not a bare string — StreamingMessage renders
+            # error.title/error.detail directly.
+            _emit(
+                state,
+                {
+                    "type": "run.failed",
+                    "runId": run_id,
+                    "error": {"title": "A conversa falhou", "status": 502, "detail": str(exc)},
+                },
+            )
     finally:
         if cancelled.is_set():
             state["status"] = "cancelled"
@@ -551,25 +594,72 @@ def read_run(run_id: str) -> dict[str, object]:
 
 
 @app.get("/api/v1/runs/{run_id}/events")
-def stream_run_events(run_id: str) -> StreamingResponse:
+def stream_run_events(run_id: str, request: Request) -> StreamingResponse:
     with _runs_lock:
         run = _runs.get(run_id)
     if run is None:
         raise UnsafePathError("Run não encontrada.")
 
-    def frames() -> Iterator[str]:
-        yield ": heartbeat\n\n"
-        events = cast(Queue[dict[str, object]], run["events"])
-        terminal = cast(Event, run["terminal"])
-        while not terminal.is_set() or not events.empty():
-            try:
-                event = events.get(timeout=10)
-            except Empty:
-                yield ": heartbeat\n\n"
-                continue
-            yield f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+    # Browsers resume a dropped EventSource by sending back the last `id:` line they
+    # saw. Replaying from there — instead of always starting at 0 — is what actually
+    # makes reconnection work, rather than just not crash.
+    last_event_id = request.headers.get("last-event-id")
+    start_index = 0
+    if last_event_id is not None:
+        try:
+            start_index = int(last_event_id) + 1
+        except ValueError:
+            start_index = 0
 
-    return StreamingResponse(frames(), media_type="text/event-stream")
+    def frames() -> Iterator[str]:
+        events = cast(list[dict[str, object]], run["events"])
+        lock = cast(Lock, run["events_lock"])
+        index = start_index
+        last_activity = time.monotonic()
+        yield ": heartbeat\n\n"
+        while True:
+            # Deliberately never end the response just because the run reached a
+            # terminal status: EventSource treats any response ending — even a clean
+            # one — as a dropped connection and auto-reconnects on its own default
+            # schedule (~3s in Chromium), with nothing here to tell it to stop. Once
+            # caught up, a reconnect would get an instantly-empty response every time,
+            # which never gives it a reason to stop retrying — an infinite loop, not a
+            # handful of retries. The client closes this subscription itself once it
+            # has processed the terminal event (run.completed/run.failed in
+            # use-chat-run.ts). This loop only ends when the client actually
+            # disconnects: the next attempt to send a chunk over a closed connection
+            # fails, and the ASGI server raises GeneratorExit into this generator —
+            # explicitly polling for disconnection isn't needed (and, tried here,
+            # deadlocked under Starlette's TestClient).
+            with lock:
+                pending = events[index:]
+            if not pending:
+                time.sleep(0.3)
+                if time.monotonic() - last_activity > 10:
+                    yield ": heartbeat\n\n"
+                    last_activity = time.monotonic()
+                continue
+            for event in pending:
+                yield (
+                    f"id: {index}\nevent: {event['type']}\n"
+                    f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                )
+                index += 1
+            last_activity = time.monotonic()
+
+    return StreamingResponse(
+        frames(),
+        media_type="text/event-stream",
+        headers={
+            # Without these, an intermediate proxy (Vite's dev-server proxy included) can
+            # buffer the streaming response and deliver it in one short-lived burst instead
+            # of live — the browser then sees the connection end almost immediately and
+            # EventSource reconnects in a tight loop, never catching up to a live run.
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/api/v1/runs/{run_id}/cancel")
