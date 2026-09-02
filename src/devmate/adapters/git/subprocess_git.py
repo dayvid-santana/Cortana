@@ -202,6 +202,11 @@ class SubprocessGit:
     def file_at_commit(self, commit_hash: str, path: str) -> str:
         return self._run(["show", f"{commit_hash}:{path}"])
 
+    def tracked_files(self, commit_hash: str) -> list[str]:
+        """Arquivos versionados no commit, sem tocar no diretório de trabalho."""
+        output = self._run(["ls-tree", "-r", "--name-only", commit_hash])
+        return [item for item in output.splitlines() if item]
+
     def changed_files(self, revision: str) -> list[str]:
         output = self._run(["diff-tree", "--root", "-r", "--no-commit-id", "--name-only", revision])
         return [item for item in output.splitlines() if item]

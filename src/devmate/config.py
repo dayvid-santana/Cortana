@@ -270,8 +270,40 @@ def write_default_config(root: Path) -> Path:
     return path
 
 
+def load_dotenv(root: Path) -> None:
+    """Carrega variáveis de um ``.env`` do projeto sem sobrescrever o ambiente.
+
+    O arquivo é uma conveniência local para credenciais e continua bloqueado do
+    contexto de arquivos do DevMate. Variáveis já exportadas pelo processo têm
+    precedência, o que também preserva o uso em CI e contêineres.
+    """
+    path = root / ".env"
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise ConfigurationError(f"Não foi possível ler {path}: {exc}") from exc
+
+    for line in lines:
+        entry = line.strip()
+        if not entry or entry.startswith("#"):
+            continue
+        if entry.startswith("export "):
+            entry = entry.removeprefix("export ").lstrip()
+        key, separator, value = entry.partition("=")
+        key = key.strip()
+        if not separator or not key or not key.replace("_", "a").isalnum():
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        os.environ.setdefault(key, value)
+
+
 def load_config(root: Path) -> AppConfig:
     """Carrega TOML e aplica variáveis de ambiente não secretas."""
+    load_dotenv(root)
     path = config_path(root)
     raw: dict[str, Any] = {}
     if path.exists():

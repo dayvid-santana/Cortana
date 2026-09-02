@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from devmate.domain.models import LLMRequest, LLMResponse
@@ -96,6 +96,27 @@ class OpenAIProvider:
                 text=str(text), references=tuple(chunk.reference for chunk in request.chunks)
             )
         except ProviderResponseError:
+            raise
+        except Exception as exc:
+            raise ProviderResponseError(f"Falha ao chamar provider OpenAI: {exc}") from exc
+
+    def stream(self, request: LLMRequest) -> Iterator[str]:
+        """Produz deltas da Responses API sem levar credenciais para a camada HTTP."""
+        available, reason = self.available()
+        if not available and self._client_factory is None:
+            if reason and "API_KEY" in reason:
+                raise ProviderAuthenticationError(reason)
+            raise ProviderUnavailableError(reason or "Provider indisponível.")
+        try:
+            with self._client().responses.stream(
+                model=request.model or self.model, input=render_input(request)
+            ) as stream:
+                for event in stream:
+                    if getattr(event, "type", None) == "response.output_text.delta":
+                        delta = getattr(event, "delta", "")
+                        if delta:
+                            yield str(delta)
+        except (ProviderAuthenticationError, ProviderUnavailableError, ProviderResponseError):
             raise
         except Exception as exc:
             raise ProviderResponseError(f"Falha ao chamar provider OpenAI: {exc}") from exc

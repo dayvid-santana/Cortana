@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import sqlite3
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from devmate.api.app import _system_instructions, app
+from devmate.api.project_registry import ProjectRegistry
 from devmate.api.schemas import ChatRequest
 from devmate.application.project_service import initialize_project
 from devmate.bootstrap import load_runtime
@@ -157,8 +160,128 @@ def test_cors_rejects_an_unknown_origin(client: TestClient) -> None:
     assert "access-control-allow-origin" not in response.headers
 
 
+def test_web_projects_register_and_expose_real_files(
+    git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("devmate.api.app.projects", ProjectRegistry(tmp_path / "projects.json"))
+    client = TestClient(app)
+
+    created = client.post("/api/v1/projects", json={"path": str(git_repo), "name": "Example"})
+
+    assert created.status_code == 201, created.text
+    project = created.json()
+    assert project["name"] == "Example"
+    assert project["activeCommitHash"]
+
+    tree = client.get(
+        f"/api/v1/projects/{project['id']}/files",
+        params={"commit": project["activeCommitHash"]},
+    )
+
+    assert tree.status_code == 200, tree.text
+    files = [item for item in tree.json()["items"] if item["type"] == "file"]
+    assert files
+
+    content = client.get(
+        f"/api/v1/projects/{project['id']}/files/content",
+        params={"commit": project["activeCommitHash"], "path": files[0]["path"]},
+    )
+
+    assert content.status_code == 200, content.text
+    assert content.json()["path"] == files[0]["path"]
+
+
+def test_web_chat_run_streams_events_and_persists_the_final_message(
+    git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("devmate.api.app.projects", ProjectRegistry(tmp_path / "projects.json"))
+    client = TestClient(app)
+    project = client.post("/api/v1/projects", json={"path": str(git_repo)}).json()
+
+    created = client.post(
+        f"/api/v1/projects/{project['id']}/chat/runs",
+        json={
+            "message": "O que mudou?",
+            "scope": "docs",
+            "commitHash": project["activeCommitHash"],
+            "provider": "mock",
+        },
+    )
+
+    assert created.status_code == 202, created.text
+    run = created.json()
+    assert run["status"] == "queued"
+    with client.stream("GET", f"/api/v1/runs/{run['id']}/events") as response:
+        payload = b"".join(response.iter_bytes()).decode()
+    assert response.status_code == 200
+    assert "event: run.started" in payload
+    assert "event: assistant.delta" in payload
+    assert "event: source.reference" in payload
+    assert "event: run.completed" in payload
+
+    messages = client.get(
+        f"/api/v1/projects/{project['id']}/threads/{run['threadId']}/messages"
+    ).json()["items"]
+    assert [message["role"] for message in messages] == ["user", "assistant"]
+    assert messages[-1]["status"] == "complete"
+
+
+def test_web_chat_run_can_be_cancelled_before_provider_execution(
+    git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("devmate.api.app.projects", ProjectRegistry(tmp_path / "projects.json"))
+    client = TestClient(app)
+    project = client.post("/api/v1/projects", json={"path": str(git_repo)}).json()
+    created = client.post(
+        f"/api/v1/projects/{project['id']}/chat/runs",
+        json={
+            "message": "Pare",
+            "scope": "docs",
+            "commitHash": project["activeCommitHash"],
+            "provider": "mock",
+        },
+    ).json()
+
+    cancelled = client.post(f"/api/v1/runs/{created['id']}/cancel")
+    assert cancelled.status_code == 200
+    # O worker observa o sinal antes/depois da chamada bloqueante ao provider.
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        state = client.get(f"/api/v1/runs/{created['id']}").json()
+        if state["status"] in {"cancelled", "completed"}:
+            break
+        time.sleep(0.01)
+    assert state["status"] in {"cancelled", "completed"}
+
+
 def test_openapi_schema_is_generated() -> None:
     schema = app.openapi()
 
     assert "/api/v1/chat" in schema["paths"]
     assert "/api/v1/status" in schema["paths"]
+
+
+def test_runtime_upgrades_a_legacy_database_without_dropping_existing_data(
+    git_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(git_repo)
+    initialize_project(git_repo)
+    database = git_repo / ".devmate" / "state.db"
+    with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE conversation_threads")
+        connection.execute("DROP TABLE web_conversation_messages")
+        connection.execute(
+            "INSERT INTO project_facts (project_id, key, value, status, confidence, introduced_at) VALUES (1, 'legacy', 'kept', 'candidate', 0.5, CURRENT_TIMESTAMP)"
+        )
+
+    load_runtime(git_repo)
+
+    with sqlite3.connect(database) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        assert {"conversation_threads", "web_conversation_messages"} <= tables
+        assert connection.execute(
+            "SELECT value FROM project_facts WHERE key = 'legacy'"
+        ).fetchone() == ("kept",)

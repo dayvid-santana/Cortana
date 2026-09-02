@@ -164,6 +164,32 @@ class ConversationMessageORM(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class ConversationThreadORM(Base):
+    __tablename__ = "conversation_threads"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), index=True)
+    commit_hash: Mapped[str] = mapped_column(String(64), index=True)
+    scope: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class WebConversationMessageORM(Base):
+    __tablename__ = "web_conversation_messages"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    thread_id: Mapped[str] = mapped_column(ForeignKey("conversation_threads.id"), index=True)
+    role: Mapped[str] = mapped_column(String(16))
+    content: Mapped[str] = mapped_column(Text)
+    scope: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16), default="complete")
+    provider_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    model_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sources_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class ReadingCheckpointORM(Base):
     __tablename__ = "reading_checkpoints"
     __table_args__ = (UniqueConstraint("project_id", "path", name="uq_checkpoint_project_path"),)

@@ -12,11 +12,13 @@ from sqlalchemy.orm import Session, sessionmaker
 from devmate.adapters.persistence.orm_models import (
     CommitORM,
     ConversationMessageORM,
+    ConversationThreadORM,
     DecisionORM,
     DocumentChangeORM,
     OpenQuestionORM,
     ProjectORM,
     ReadingCheckpointORM,
+    WebConversationMessageORM,
 )
 from devmate.domain.models import CommitRecord, DocumentChange, Project
 
@@ -70,6 +72,31 @@ class QuestionView:
     source_start_line: int | None
     source_end_line: int | None
     source_commit: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ThreadView:
+    id: str
+    project_id: int
+    commit_hash: str
+    scope: str
+    created_at: datetime
+    updated_at: datetime
+    message_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class WebMessageView:
+    id: str
+    thread_id: str
+    role: str
+    content: str
+    scope: str
+    status: str
+    provider_name: str | None
+    model_name: str | None
+    sources_json: str
+    created_at: datetime
 
 
 class RepositoryStore:
@@ -243,6 +270,140 @@ class RepositoryStore:
             )
             return [
                 (item.role, item.content) for item in reversed(session.scalars(statements).all())
+            ]
+
+    def create_thread(
+        self, thread_id: str, project_id: int, commit_hash: str, scope: str
+    ) -> ThreadView:
+        now = utcnow()
+        with self._factory.begin() as session:
+            item = ConversationThreadORM(
+                id=thread_id,
+                project_id=project_id,
+                commit_hash=commit_hash,
+                scope=scope,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(item)
+        return ThreadView(thread_id, project_id, commit_hash, scope, now, now, 0)
+
+    def thread(self, project_id: int, thread_id: str) -> ThreadView | None:
+        with self._factory() as session:
+            item = session.scalar(
+                select(ConversationThreadORM).where(
+                    ConversationThreadORM.id == thread_id,
+                    ConversationThreadORM.project_id == project_id,
+                )
+            )
+            return self._thread_view(session, item) if item else None
+
+    def threads(self, project_id: int, commit_hash: str | None = None) -> list[ThreadView]:
+        with self._factory() as session:
+            statement = select(ConversationThreadORM).where(
+                ConversationThreadORM.project_id == project_id
+            )
+            if commit_hash:
+                statement = statement.where(ConversationThreadORM.commit_hash == commit_hash)
+            return [
+                self._thread_view(session, item)
+                for item in session.scalars(
+                    statement.order_by(desc(ConversationThreadORM.updated_at))
+                ).all()
+            ]
+
+    @staticmethod
+    def _thread_view(session: Session, item: ConversationThreadORM) -> ThreadView:
+        count = (
+            session.query(WebConversationMessageORM)
+            .filter(WebConversationMessageORM.thread_id == item.id)
+            .count()
+        )
+        return ThreadView(
+            item.id,
+            item.project_id,
+            item.commit_hash,
+            item.scope,
+            item.created_at,
+            item.updated_at,
+            count,
+        )
+
+    def add_web_message(
+        self,
+        message_id: str,
+        thread_id: str,
+        role: str,
+        content: str,
+        scope: str,
+        status: str,
+        provider_name: str | None,
+        model_name: str | None,
+        sources_json: str = "[]",
+    ) -> WebMessageView:
+        now = utcnow()
+        with self._factory.begin() as session:
+            session.add(
+                WebConversationMessageORM(
+                    id=message_id,
+                    thread_id=thread_id,
+                    role=role,
+                    content=content,
+                    scope=scope,
+                    status=status,
+                    provider_name=provider_name,
+                    model_name=model_name,
+                    sources_json=sources_json,
+                    created_at=now,
+                )
+            )
+            thread = session.get(ConversationThreadORM, thread_id)
+            if thread:
+                thread.updated_at = now
+        return WebMessageView(
+            message_id,
+            thread_id,
+            role,
+            content,
+            scope,
+            status,
+            provider_name,
+            model_name,
+            sources_json,
+            now,
+        )
+
+    def web_messages(
+        self, project_id: int, thread_id: str, limit: int = 30
+    ) -> list[WebMessageView]:
+        with self._factory() as session:
+            exists = session.scalar(
+                select(ConversationThreadORM.id).where(
+                    ConversationThreadORM.id == thread_id,
+                    ConversationThreadORM.project_id == project_id,
+                )
+            )
+            if not exists:
+                return []
+            return [
+                WebMessageView(
+                    item.id,
+                    item.thread_id,
+                    item.role,
+                    item.content,
+                    item.scope,
+                    item.status,
+                    item.provider_name,
+                    item.model_name,
+                    item.sources_json,
+                    item.created_at,
+                )
+                for item in session.scalars(
+                    select(WebConversationMessageORM)
+                    .where(WebConversationMessageORM.thread_id == thread_id)
+                    .order_by(WebConversationMessageORM.created_at)
+                    .limit(limit)
+                ).all()
             ]
 
     def add_decision(

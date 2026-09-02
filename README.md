@@ -54,12 +54,17 @@ Consulte o [guia completo de uso com Docker](docs/docker-usage.md) para o fluxo 
 
 ## Providers
 
-O provider padrão é configurado em `.devmate/config.toml`, ou por `DEVMATE_PROVIDER`. Credenciais ficam somente no ambiente, nunca no TOML.
+O provider padrão é configurado em `.devmate/config.toml`, ou por `DEVMATE_PROVIDER`. Credenciais ficam somente no ambiente, nunca no TOML. Para desenvolvimento local, a CLI também carrega automaticamente o `.env` na raiz do projeto (ele é ignorado pelo Git e bloqueado do contexto enviado aos providers):
+
+```dotenv
+# .env
+OPENAI_API_KEY=cole_sua_chave_aqui
+```
 
 ```bash
 devmate providers list
 devmate ask --provider mock "Explique a documentação"
-OPENAI_API_KEY=... devmate ask --provider openai "Explique a documentação"
+devmate ask --provider openai "Explique a documentação"
 devmate inspect --provider codex --files src/app.py "O código segue docs/auth.md?"
 devmate listen --provider codex --full-repo
 ```
@@ -206,7 +211,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/chat \
 
 `scope` é `"docs"` por padrão; `"code"` exige `files` ou `full_repo: true` no corpo da requisição, com a mesma autorização explícita do `inspect --full-repo`. A resposta traz `sources` estruturadas (`path`, `start_line`, `end_line`, `commit_hash`, `heading`) para o frontend linkar direto ao trecho citado, nunca inventadas a partir do texto. `source: "speech"` no corpo pede uma resposta mais concisa, para perguntas que vieram de voz transcrita.
 
-CORS aceita apenas `http://127.0.0.1:5173`/`http://localhost:5173` (o dev server padrão do Vite); `--host` continua `127.0.0.1` por padrão — não exponha em `0.0.0.0` fora de uma rede confiável. O schema OpenAPI fica disponível em `/openapi.json` para gerar um cliente tipado.
+CORS aceita o dev server padrão em `http://127.0.0.1:5174`/`http://localhost:5174` (e mantém `5173` por compatibilidade); `--host` continua `127.0.0.1` por padrão — não exponha em `0.0.0.0` fora de uma rede confiável. O schema OpenAPI fica disponível em `/openapi.json` para gerar um cliente tipado.
 
 Para subir a API em Docker e um frontend (ex.: `devmate-web`) acessá-la pela rede do Compose, veja [docs/docker-usage.md](docs/docker-usage.md#10-conectar-com-o-frontend-devmate-web).
 

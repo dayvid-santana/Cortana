@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
 import tomllib
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from devmate.config import DEFAULT_CONFIG_TOML, AppConfig
+from devmate.config import DEFAULT_CONFIG_TOML, AppConfig, load_dotenv
 from devmate.constants import ASSISTANT_NAME
 from devmate.domain.enums import Scope
 
@@ -78,3 +80,18 @@ def test_voice_help_command_needs_no_document_path() -> None:
     command = config.voice.commands[0]
     assert command.action == "help"
     assert command.path is None
+
+
+def test_load_dotenv_exposes_openai_key_without_overwriting_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / ".env").write_text(
+        'OPENAI_API_KEY="sk-from-dotenv"\nDEVMATE_PROVIDER=openai\n', encoding="utf-8"
+    )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("DEVMATE_PROVIDER", "mock")
+
+    load_dotenv(tmp_path)
+
+    assert os.environ["OPENAI_API_KEY"] == "sk-from-dotenv"
+    assert os.environ["DEVMATE_PROVIDER"] == "mock"

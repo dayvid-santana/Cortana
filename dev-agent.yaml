@@ -1,0 +1,33 @@
+project:
+  name: Cortana
+  author: Dayvid Santana
+
+documentation:
+  priority: [AGENTS.md, docs/**, README.md]
+
+context:
+  include: [src/**, tests/**, docs/**, AGENTS.md, README.md]
+  exclude: [.git/**, .venv/**, venv/**, node_modules/**, dist/**, build/**, coverage/**, __pycache__/**, "*.pyc", "*.log"]
+  contextosAgentes: [agent-context/**]
+  max_files: 12
+  max_file_chars: 16000
+  max_total_chars: 80000
+  dependency_depth: 1
+
+testing:
+  command: pytest
+
+git:
+  conventional_commits: true
+  review_staged: true
+  suggest_commit_split: true
+
+headers:
+  enabled: true
+  author: Dayvid Santana
+  date_format: "%d/%m/%Y"
+  history: true
+
+security:
+  require_architecture_approval: true
+  require_destructive_command_approval: true

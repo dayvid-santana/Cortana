@@ -8,7 +8,11 @@ from pathlib import Path
 from devmate.adapters.filesystem.local_filesystem import LocalFilesystem
 from devmate.adapters.git.subprocess_git import SubprocessGit
 from devmate.adapters.llm.registry import ProviderRegistry
-from devmate.adapters.persistence.database import create_database_engine, session_factory
+from devmate.adapters.persistence.database import (
+    create_database_engine,
+    migrate_database,
+    session_factory,
+)
 from devmate.adapters.persistence.repositories import RepositoryStore
 from devmate.adapters.speech.registry import get_speech_input_provider, get_speech_provider
 from devmate.application.context_service import ContextService
@@ -130,7 +134,11 @@ def load_runtime(start: Path) -> Runtime:
     if not config_path(root).exists() or not database_path(root).exists():
         raise ConfigurationError("DevMate não foi inicializado. Execute `devmate init`.")
     config = load_config(root)
-    store = RepositoryStore(session_factory(create_database_engine(database_path(root))))
+    engine = create_database_engine(database_path(root))
+    # ``create_all`` é aditivo: bancos de projetos já registrados recebem as
+    # tabelas introduzidas por migrations sem remover nem recriar dados antigos.
+    migrate_database(engine)
+    store = RepositoryStore(session_factory(engine))
     filesystem = LocalFilesystem(
         root=root,
         max_file_bytes=config.security.max_file_bytes,

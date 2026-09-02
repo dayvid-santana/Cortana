@@ -7,7 +7,7 @@ DevMate considera arquivos, diffs, código, comentários e headings como dados n
 | Prompt injection em Markdown | tags de contexto não confiável e instruções explícitas aos providers |
 | Path traversal | resolução canônica e verificação de descendência do root, também na escrita (`write_text`) |
 | Symlink externo | recusado por padrão |
-| Segredos | `.env`, chaves e padrões configuráveis bloqueados antes de leitura/escrita/provider |
+| Segredos | `.env`, chaves e padrões configuráveis bloqueados antes de leitura/escrita/provider; o `.env` só é lido na inicialização para popular o ambiente do processo |
 | Escrita fora do escopo autorizado | `EditProposalService` rejeita (erro, não aplica nada) qualquer caminho proposto pelo provider que não esteja entre os arquivos de código explicitamente selecionados na pergunta |
 | Edição sem revisão | `devmate edit`/`docs`/`refactor` só escrevem após confirmação explícita por arquivo (ou `--yes`); o diff mostrado é calculado localmente com `difflib`, nunca aceito como veio do provider; o provider (incl. Codex) nunca ganha acesso de escrita — só descreve o conteúdo em texto |
 | Command injection | `subprocess` com lista de argumentos, timeout e sem shell |
