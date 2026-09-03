@@ -213,6 +213,8 @@ curl -X POST http://127.0.0.1:8000/api/v1/chat \
 
 CORS aceita o dev server padrão em `http://127.0.0.1:5174`/`http://localhost:5174` (e mantém `5173` por compatibilidade); `--host` continua `127.0.0.1` por padrão — não exponha em `0.0.0.0` fora de uma rede confiável. O schema OpenAPI fica disponível em `/openapi.json` para gerar um cliente tipado.
 
+Além de `health`/`status`/`chat`, a API expõe o restante do contrato consumido pelo frontend web: `/projects` (registrar, listar, escanear), `/projects/{id}/commits`, `/files`(`/diff`), `/decisions`, `/questions`, `/threads`, `/projects/{id}/chat/runs` com stream SSE em `/runs/{id}/events`, `/diagnostics` (o mesmo `doctor()` da CLI, em JSON), `/providers` e `/providers/{name}` (a `ProviderRegistry` real, com roteamento por tarefa em `PUT /projects/{id}/settings/providers`), `/speech/providers`, `/speech/voices` (+ preview de voz) e `/projects/{id}/settings/speech`, e `/projects/{id}/reading-sessions` com áudio por segmento gerado sob demanda pelo provider de fala configurado — ver `src/devmate/api/app.py`. Nenhum desses endpoints usa dado fabricado: tudo vem dos mesmos application services da CLI. Duas limitações reais valem notar: o provider de fala `system` (padrão) fala direto pelo sistema operacional e não gera arquivo de áudio, então preview de voz e sessões de leitura só tocam no navegador com `speech.provider = "openai"`; e o modo `explain` de uma sessão de leitura chama o provider de LLM padrão do projeto por trecho (`mock` por padrão, determinístico mas não uma explicação real).
+
 Para subir a API em Docker e um frontend (ex.: `devmate-web`) acessá-la pela rede do Compose, veja [docs/docker-usage.md](docs/docker-usage.md#10-conectar-com-o-frontend-devmate-web).
 
 ## Segurança

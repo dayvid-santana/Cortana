@@ -7,6 +7,7 @@ regras de escopo, segurança e citações são exatamente as mesmas dos dois lad
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from collections.abc import Iterator
@@ -16,10 +17,11 @@ from threading import Event, Lock, Thread
 from typing import Any, cast
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from devmate.adapters.speech.registry import get_speech_provider
 from devmate.api.dependencies import get_runtime
 from devmate.api.errors import status_for
 from devmate.api.project_registry import ProjectRegistry, RegisteredProject
@@ -32,10 +34,72 @@ from devmate.api.schemas import (
     StatusResponse,
 )
 from devmate.application.conversation_service import ConversationService
+from devmate.application.doctor_service import doctor
 from devmate.application.inspection_conversation_service import InspectionConversationService
+from devmate.application.reading_session_service import (
+    ReadingSegment,
+    build_segments,
+    changed_line_ranges,
+    filter_by_ranges,
+)
 from devmate.bootstrap import Runtime
+from devmate.config import database_path
+from devmate.config_writer import (
+    set_default_model,
+    set_default_provider,
+    set_speech_rate,
+    set_speech_voice,
+    set_task_routing,
+)
+from devmate.domain.ports import LanguageModelProvider, SpeechProvider
+from devmate.domain.speech import DEFAULT_VOICE_PREVIEW_TEXT, SpeechRequest, VoiceInfo
 from devmate.errors import DevMateError, UnsafePathError
 from devmate.prompts.api_chat import API_CHAT_SYSTEM
+
+_KNOWN_LLM_PROVIDERS = ("mock", "codex", "openai", "openai_compatible")
+_KNOWN_SPEECH_PROVIDERS = ("system", "openai")
+
+# Metadados estáticos por provider de LLM (taxonomia), combinados com o estado real
+# (disponibilidade, modelo, tarefas roteadas) calculado por request em
+# ``_llm_provider_payload``. O contrato de capacidades é o mesmo enum usado pelo
+# frontend para ambos providers de LLM e de fala (não há um enum mais fino).
+_PROVIDER_METADATA: dict[str, dict[str, object]] = {
+    "mock": {
+        "type": "local",
+        "local": True,
+        "capabilities": ["conversation", "repository_access", "citations"],
+    },
+    "codex": {
+        "type": "local",
+        "local": True,
+        "capabilities": [
+            "conversation",
+            "repository_access",
+            "tool_use",
+            "code_inspection",
+            "citations",
+        ],
+    },
+    "openai": {
+        "type": "remote",
+        "local": False,
+        "capabilities": ["conversation", "structured_output", "streaming", "citations"],
+    },
+    "openai_compatible": {
+        "type": "remote",
+        "local": False,
+        "capabilities": ["conversation", "structured_output", "citations"],
+    },
+}
+
+_AUDIO_MEDIA_TYPES = {
+    "mp3": "audio/mpeg",
+    "opus": "audio/ogg",
+    "aac": "audio/aac",
+    "flac": "audio/flac",
+    "wav": "audio/wav",
+    "pcm": "audio/L16",
+}
 
 app = FastAPI(
     title="DevMate API",
@@ -56,7 +120,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PUT"],
     allow_headers=["*"],
 )
 
@@ -129,6 +193,22 @@ def _project_status(project: RegisteredProject, runtime: Runtime) -> dict[str, o
 
 def _runtime(project_id: str) -> tuple[RegisteredProject, Runtime]:
     return projects.runtime(project_id)
+
+
+def _shared_runtime() -> Runtime:
+    """Runtime para endpoints não específicos de projeto (diagnostics, catálogo de
+    providers/vozes): o primeiro projeto registrado no modo multi-projeto, com o
+    diretório de trabalho do processo como fallback (modo single-repo, ``devmate
+    serve`` executado dentro de um projeto — igual a como ``/status``/``/chat`` já
+    resolvem). Sem isso, esses endpoints ignorariam por completo o projeto que a
+    pessoa usuária registrou pela API web e refletiriam um repositório não
+    relacionado (o diretório onde o processo da API por acaso foi iniciado).
+    """
+    registered = projects.list()
+    if registered:
+        _, runtime = projects.runtime(registered[0].id)
+        return runtime
+    return get_runtime()
 
 
 def _source_payload(reference: SourceReferenceOut) -> dict[str, object]:
@@ -376,25 +456,419 @@ def list_thread_messages(project_id: str, thread_id: str, limit: int = 30) -> di
     }
 
 
-@app.get("/api/v1/providers")
-def list_providers() -> dict[str, list[dict[str, object]]]:
-    names: set[str] = set()
-    for project in projects.list():
-        _, runtime = projects.runtime(project.id)
-        names.add(runtime.config.provider.default)
-    return {
-        "items": [
-            {
-                "name": name,
-                "type": name,
-                "local": name == "mock",
-                "availability": "available",
-                "authConfigured": name == "mock",
-                "capabilities": ["conversation", "repository_access", "citations"],
-            }
-            for name in names
-        ]
+def _llm_provider_payload(name: str, runtime: Runtime) -> dict[str, object]:
+    provider = runtime.providers.get(name)
+    available, _detail = provider.available()
+    meta = _PROVIDER_METADATA[name]
+    model: str | None = None
+    if name == "codex":
+        model = runtime.config.language_model.providers.codex.model
+    elif name == runtime.config.provider.default:
+        model = runtime.config.provider.model
+    routed_tasks = [
+        task
+        for task, routed_name in runtime.config.provider.task_routing.items()
+        if routed_name == name
+    ]
+    payload: dict[str, object] = {
+        "name": name,
+        "type": meta["type"],
+        "local": meta["local"],
+        "availability": "available" if available else "unavailable",
+        "authConfigured": available,
+        "capabilities": meta["capabilities"],
+        "routedTasks": routed_tasks,
     }
+    if model:
+        payload["model"] = model
+    return payload
+
+
+def _speech_provider_payload(name: str, runtime: Runtime) -> dict[str, object]:
+    provider = get_speech_provider(name, runtime.config, runtime.root)
+    available, _detail = provider.available()
+    capabilities = provider.capabilities()
+    auth_configured = (
+        provider.api_key_configured() if hasattr(provider, "api_key_configured") else True
+    )
+    payload: dict[str, object] = {
+        "name": name,
+        "type": "remote" if capabilities.remote else "local",
+        "local": not capabilities.remote,
+        "availability": "available" if available else "unavailable",
+        "authConfigured": bool(auth_configured),
+        # O contrato compartilha um único enum de capacidades entre providers de LLM e
+        # de fala; "conversation" é o único membro que descreve corretamente síntese
+        # de voz, então é o único usado aqui.
+        "capabilities": ["conversation"],
+        "routedTasks": [],
+    }
+    if name == "openai":
+        payload["model"] = runtime.config.speech.providers.openai.model
+    return payload
+
+
+def _voice_payload(voice: VoiceInfo) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "id": voice.id,
+        "name": voice.name,
+        "provider": voice.provider,
+        # Vozes do sistema operacional não relatam idioma; "pt-BR" reflete o padrão
+        # de entrada de voz do próprio DevMate (`speech.input_language`), não um dado
+        # inventado por voz.
+        "language": voice.language or "pt-BR",
+        "recommended": voice.recommended,
+        "availability": "available",
+    }
+    if voice.description:
+        payload["description"] = voice.description
+    return payload
+
+
+def _find_voice_provider(runtime: Runtime, voice_id: str) -> tuple[str, SpeechProvider, VoiceInfo]:
+    for name in _KNOWN_SPEECH_PROVIDERS:
+        speech = get_speech_provider(name, runtime.config, runtime.root)
+        available, _detail = speech.available()
+        if not available:
+            continue
+        try:
+            candidates = speech.list_voices()
+        except DevMateError:
+            continue
+        for voice in candidates:
+            if voice.id == voice_id:
+                return name, speech, voice
+    raise UnsafePathError(f"Voz desconhecida: {voice_id}")
+
+
+@app.get("/api/v1/providers")
+def list_providers(
+    runtime: Runtime = Depends(_shared_runtime),
+) -> dict[str, list[dict[str, object]]]:
+    return {"items": [_llm_provider_payload(name, runtime) for name in _KNOWN_LLM_PROVIDERS]}
+
+
+@app.get("/api/v1/providers/{provider_name}")
+def read_provider(
+    provider_name: str, runtime: Runtime = Depends(_shared_runtime)
+) -> dict[str, object]:
+    runtime.providers.get(provider_name)  # levanta ProviderNotFoundError (404) se desconhecido
+    return _llm_provider_payload(provider_name, runtime)
+
+
+@app.put("/api/v1/projects/{project_id}/settings/providers")
+def update_provider_settings(project_id: str, body: dict[str, object]) -> dict[str, object]:
+    project, runtime = _runtime(project_id)
+    config_path = runtime.root / ".devmate" / "config.toml"
+
+    default_provider = body.get("defaultProvider")
+    if default_provider is not None:
+        if not isinstance(default_provider, str) or default_provider not in _KNOWN_LLM_PROVIDERS:
+            raise UnsafePathError(f"Provider desconhecido: {default_provider!r}")
+        set_default_provider(config_path, default_provider)
+
+    default_model = body.get("defaultModel")
+    if default_model is not None:
+        if not isinstance(default_model, str):
+            raise UnsafePathError("defaultModel deve ser texto.")
+        set_default_model(config_path, default_model)
+
+    task_routing = body.get("taskRouting")
+    if task_routing is not None:
+        if not isinstance(task_routing, dict):
+            raise UnsafePathError("taskRouting deve ser um objeto {tarefa: provider}.")
+        for routed_name in task_routing.values():
+            if routed_name not in _KNOWN_LLM_PROVIDERS:
+                raise UnsafePathError(f"Provider desconhecido em taskRouting: {routed_name!r}")
+        set_task_routing(config_path, cast(dict[str, str], task_routing))
+
+    _, refreshed = _runtime(project_id)
+    return _project_status(project, refreshed)
+
+
+@app.get("/api/v1/diagnostics")
+def get_diagnostics(runtime: Runtime = Depends(_shared_runtime)) -> dict[str, object]:
+    checks = doctor(runtime)
+    failed = [check for check in checks if not check.ok]
+    database_status = (
+        "ready" if (runtime.root / ".devmate" / "state.db").exists() else "unavailable"
+    )
+    result: dict[str, object] = {
+        "backendVersion": app.version,
+        "uptimeSeconds": int(time.monotonic() - _started_at),
+        "database": {"status": database_status, "path": str(database_path(runtime.root))},
+        "providers": [_llm_provider_payload(name, runtime) for name in _KNOWN_LLM_PROVIDERS],
+        "speechProviders": [
+            _speech_provider_payload(name, runtime) for name in _KNOWN_SPEECH_PROVIDERS
+        ],
+    }
+    if failed:
+        result["lastError"] = "; ".join(f"{check.name}: {check.detail}" for check in failed)
+    return result
+
+
+@app.get("/api/v1/speech/providers")
+def list_speech_providers(
+    runtime: Runtime = Depends(_shared_runtime),
+) -> dict[str, list[dict[str, object]]]:
+    return {"items": [_speech_provider_payload(name, runtime) for name in _KNOWN_SPEECH_PROVIDERS]}
+
+
+@app.get("/api/v1/speech/voices")
+def list_speech_voices(
+    provider: str | None = None, runtime: Runtime = Depends(_shared_runtime)
+) -> dict[str, list[dict[str, object]]]:
+    names = (provider,) if provider else _KNOWN_SPEECH_PROVIDERS
+    items: list[dict[str, object]] = []
+    for name in names:
+        if name not in _KNOWN_SPEECH_PROVIDERS:
+            continue
+        speech = get_speech_provider(name, runtime.config, runtime.root)
+        available, _detail = speech.available()
+        if not available:
+            continue
+        try:
+            voices = speech.list_voices()
+        except DevMateError:
+            continue
+        items.extend(_voice_payload(voice) for voice in voices)
+    return {"items": items}
+
+
+@app.post("/api/v1/speech/voices/preview")
+def preview_voice(
+    body: dict[str, str], runtime: Runtime = Depends(_shared_runtime)
+) -> dict[str, object]:
+    voice_id = str(body.get("voiceId", "")).strip()
+    if not voice_id:
+        raise UnsafePathError("voiceId é obrigatório.")
+    provider_name, speech, voice = _find_voice_provider(runtime, voice_id)
+    if not speech.capabilities().produces_audio_files:
+        raise UnsafePathError(
+            f"O provider de fala '{provider_name}' fala direto no dispositivo local e não "
+            "gera um arquivo de áudio para pré-visualizar no navegador."
+        )
+    # Sintetiza agora para falhar cedo (credencial ausente, voz inválida) em vez de só
+    # quando o navegador buscar o áudio.
+    speech.synthesize(
+        SpeechRequest(
+            text=DEFAULT_VOICE_PREVIEW_TEXT, voice=voice.id, rate=runtime.config.speech.rate
+        )
+    )
+    return {
+        "voiceId": voice.id,
+        "audioUrl": f"/api/v1/speech/voices/preview/audio?voiceId={voice.id}",
+    }
+
+
+@app.get("/api/v1/speech/voices/preview/audio")
+def preview_voice_audio(voiceId: str, runtime: Runtime = Depends(_shared_runtime)) -> Response:
+    provider_name, speech, voice = _find_voice_provider(runtime, voiceId)
+    if not speech.capabilities().produces_audio_files:
+        raise UnsafePathError(
+            f"O provider de fala '{provider_name}' fala direto no dispositivo local e não "
+            "gera um arquivo de áudio para pré-visualizar no navegador."
+        )
+    result = speech.synthesize(
+        SpeechRequest(
+            text=DEFAULT_VOICE_PREVIEW_TEXT, voice=voice.id, rate=runtime.config.speech.rate
+        )
+    )
+    if result.audio_path is None:
+        raise UnsafePathError("O provider de fala não retornou um arquivo de áudio.")
+    media_type = _AUDIO_MEDIA_TYPES.get(
+        getattr(speech, "response_format", "mp3"), "application/octet-stream"
+    )
+    return Response(content=result.audio_path.read_bytes(), media_type=media_type)
+
+
+@app.put("/api/v1/projects/{project_id}/settings/speech")
+def update_speech_settings(project_id: str, body: dict[str, object]) -> dict[str, object]:
+    project, runtime = _runtime(project_id)
+    del project
+    config_path = runtime.root / ".devmate" / "config.toml"
+
+    provider_name = body.get("provider")
+    if not isinstance(provider_name, str) or provider_name not in _KNOWN_SPEECH_PROVIDERS:
+        raise UnsafePathError(f"Provider de fala desconhecido: {provider_name!r}")
+    voice_id = body.get("voiceId")
+    if not isinstance(voice_id, str) or not voice_id:
+        raise UnsafePathError("voiceId é obrigatório.")
+    set_speech_voice(config_path, voice_id, provider_name)
+
+    rate = body.get("rate")
+    if rate is not None:
+        if not isinstance(rate, int | float):
+            raise UnsafePathError("rate deve ser numérico.")
+        set_speech_rate(config_path, int(rate))
+
+    _, refreshed = _runtime(project_id)
+    speech = get_speech_provider(provider_name, refreshed.config, refreshed.root)
+    matched_voice = next((voice for voice in speech.list_voices() if voice.id == voice_id), None)
+    payload: dict[str, object] = {
+        "provider": provider_name,
+        "voiceId": voice_id,
+        "language": (matched_voice.language if matched_voice else None) or "pt-BR",
+        "rate": refreshed.config.speech.rate,
+        "capabilities": ["conversation"],
+    }
+    if provider_name == "openai":
+        payload["model"] = refreshed.config.speech.providers.openai.model
+    return payload
+
+
+_reading_sessions: dict[str, dict[str, Any]] = {}
+_reading_sessions_lock = Lock()
+
+
+def _reading_session_payload(session: dict[str, Any], runtime: Runtime) -> dict[str, object]:
+    try:
+        head = runtime.git.resolve_commit("HEAD")
+        current_content = runtime.git.file_at_commit(head, session["filePath"])
+        stale = (
+            hashlib.sha256(current_content.encode("utf-8")).hexdigest() != session["contentHash"]
+        )
+    except DevMateError:
+        stale = True
+    segments = cast(list[ReadingSegment], session["segments"])
+    session_id = session["id"]
+    return {
+        "id": session_id,
+        "projectId": session["projectId"],
+        "filePath": session["filePath"],
+        "commitHash": session["commitHash"],
+        "voice": session["voice"],
+        "mode": session["mode"],
+        "segments": [
+            {
+                "index": segment.index,
+                "text": segment.text,
+                **({"heading": segment.heading} if segment.heading else {}),
+                "audioUrl": f"/api/v1/reading-sessions/{session_id}/segments/{segment.index}/audio",
+            }
+            for segment in segments
+        ],
+        "createdAt": session["createdAt"],
+        "stale": stale,
+    }
+
+
+@app.post("/api/v1/projects/{project_id}/reading-sessions", status_code=201)
+def create_reading_session(project_id: str, body: dict[str, object]) -> dict[str, object]:
+    _, runtime = _runtime(project_id)
+
+    file_path = str(body.get("filePath", "")).strip()
+    if not file_path:
+        raise UnsafePathError("filePath é obrigatório.")
+    _visible_path(runtime, file_path)
+
+    mode = str(body.get("mode", "narrate"))
+    if mode not in {"verbatim", "narrate", "explain"}:
+        raise UnsafePathError("mode deve ser verbatim, narrate ou explain.")
+    skip_code = bool(body.get("skipCode", True))
+    changes_only = bool(body.get("changesOnly", False))
+    start_line = body.get("startLine")
+    end_line = body.get("endLine")
+
+    resolved_commit = runtime.git.resolve_commit(str(body.get("commitHash") or "HEAD"))
+    content = runtime.git.file_at_commit(resolved_commit, file_path)
+
+    requested_voice = body.get("voice")
+    if isinstance(requested_voice, str) and requested_voice:
+        provider_name, _speech, voice = _find_voice_provider(runtime, requested_voice)
+        voice_id = voice.id
+    else:
+        provider_name = runtime.config.speech.provider
+        voice_id = runtime.config.speech.voice or ""
+
+    explain_provider: LanguageModelProvider | None = None
+    if mode == "explain":
+        explain_provider = runtime.providers.get(runtime.config.provider.default)
+
+    segments = build_segments(
+        content,
+        cast(Any, mode),
+        skip_code,
+        int(start_line) if isinstance(start_line, int | float) else None,
+        int(end_line) if isinstance(end_line, int | float) else None,
+        explain_provider,
+        file_path,
+        resolved_commit,
+    )
+
+    if changes_only:
+        record = runtime.git.commit_metadata(resolved_commit)
+        diff_text = runtime.git._diff(record, file_path, runtime.config.security.max_diff_chars)
+        segments = filter_by_ranges(segments, changed_line_ranges(diff_text))
+
+    session_id = f"reading_{uuid4().hex}"
+    session: dict[str, Any] = {
+        "id": session_id,
+        "projectId": project_id,
+        "filePath": file_path,
+        "commitHash": resolved_commit,
+        "voice": voice_id,
+        "mode": mode,
+        "segments": segments,
+        "createdAt": datetime.now(UTC).isoformat(),
+        "providerName": provider_name,
+        "contentHash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        "stopped": False,
+    }
+    with _reading_sessions_lock:
+        _reading_sessions[session_id] = session
+    return _reading_session_payload(session, runtime)
+
+
+@app.get("/api/v1/reading-sessions/{session_id}")
+def read_reading_session(session_id: str) -> dict[str, object]:
+    with _reading_sessions_lock:
+        session = _reading_sessions.get(session_id)
+    if session is None:
+        raise UnsafePathError("Sessão de leitura não encontrada.")
+    _, runtime = projects.runtime(session["projectId"])
+    return _reading_session_payload(session, runtime)
+
+
+@app.post("/api/v1/reading-sessions/{session_id}/stop", status_code=204)
+def stop_reading_session(session_id: str) -> Response:
+    with _reading_sessions_lock:
+        session = _reading_sessions.get(session_id)
+        if session is None:
+            raise UnsafePathError("Sessão de leitura não encontrada.")
+        session["stopped"] = True
+    return Response(status_code=204)
+
+
+@app.get("/api/v1/reading-sessions/{session_id}/segments/{index}/audio")
+def reading_session_segment_audio(session_id: str, index: int) -> Response:
+    with _reading_sessions_lock:
+        session = _reading_sessions.get(session_id)
+    if session is None:
+        raise UnsafePathError("Sessão de leitura não encontrada.")
+    segments = cast(list[ReadingSegment], session["segments"])
+    if index < 0 or index >= len(segments):
+        raise UnsafePathError("Segmento não encontrado.")
+
+    _, runtime = projects.runtime(session["projectId"])
+    provider_name = cast(str, session["providerName"])
+    voice_id = cast(str, session["voice"]) or None
+    speech = get_speech_provider(provider_name, runtime.config, runtime.root, voice_id)
+    if not speech.capabilities().produces_audio_files:
+        raise UnsafePathError(
+            f"O provider de fala '{provider_name}' fala direto no dispositivo local e não gera "
+            "um arquivo de áudio para o navegador; configure um provider remoto (ex.: openai) "
+            "para ouvir sessões de leitura pelo navegador."
+        )
+    result = speech.synthesize(
+        SpeechRequest(text=segments[index].text, voice=voice_id, rate=runtime.config.speech.rate)
+    )
+    if result.audio_path is None:
+        raise UnsafePathError("O provider de fala não retornou um arquivo de áudio.")
+    media_type = _AUDIO_MEDIA_TYPES.get(
+        getattr(speech, "response_format", "mp3"), "application/octet-stream"
+    )
+    return Response(content=result.audio_path.read_bytes(), media_type=media_type)
 
 
 def _system_instructions(body: ChatRequest) -> str:
@@ -502,11 +976,11 @@ def _execute_chat_run(
                 runtime.project_id,
                 message,
                 provider,
-                lambda delta: _emit(
-                    state, {"type": "assistant.delta", "runId": run_id, "delta": delta}
-                )
-                if not cancelled.is_set()
-                else None,
+                lambda delta: (
+                    _emit(state, {"type": "assistant.delta", "runId": run_id, "delta": delta})
+                    if not cancelled.is_set()
+                    else None
+                ),
                 commit,
                 None,
                 API_CHAT_SYSTEM,
@@ -535,8 +1009,15 @@ def _execute_chat_run(
         thread_id = cast(str, state["threadId"])
         created_at = datetime.now(UTC).isoformat()
         runtime.store.add_web_message(
-            message_id, thread_id, "assistant", result.response.text,
-            scope, "complete", provider, None, json.dumps(sources),
+            message_id,
+            thread_id,
+            "assistant",
+            result.response.text,
+            scope,
+            "complete",
+            provider,
+            None,
+            json.dumps(sources),
         )
         state["status"] = "completed"
         # The frontend's contract (RunEvent's run.completed) requires the persisted

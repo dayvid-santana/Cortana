@@ -27,6 +27,9 @@ class ProviderConfig(BaseModel):
     default: str = DEFAULT_PROVIDER
     model: str | None = None
     openai_base_url: str | None = None
+    # Tarefa -> nome do provider (ex.: {"code_inspection": "codex"}). Vazio significa
+    # que toda tarefa usa `default`. Ver `devmate.config_writer.set_task_routing`.
+    task_routing: dict[str, str] = Field(default_factory=dict)
 
 
 DEFAULT_CODEX_SYSTEM_INSTRUCTION = (

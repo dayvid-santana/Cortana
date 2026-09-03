@@ -36,6 +36,33 @@ def set_default_provider(path: Path, name: str) -> None:
     _save(path, document)
 
 
+def set_default_model(path: Path, model: str | None) -> None:
+    document = _load(path)
+    _assign(document, ("provider", "model"), model)
+    _save(path, document)
+
+
+def set_task_routing(path: Path, routing: dict[str, str]) -> None:
+    """Substitui inteiramente ``[provider.task_routing]`` pelo mapeamento informado."""
+    document = _load(path)
+    table: Any = document
+    for key in ("provider", "task_routing"):
+        if key not in table:
+            table[key] = tomlkit.table()
+        table = table[key]
+    for existing_key in list(table.keys()):
+        del table[existing_key]
+    for task, provider_name in routing.items():
+        table[task] = provider_name
+    _save(path, document)
+
+
+def set_speech_rate(path: Path, rate: int) -> None:
+    document = _load(path)
+    _assign(document, ("speech", "rate"), rate)
+    _save(path, document)
+
+
 def set_default_scope(path: Path, scope: str) -> None:
     """Grava ``[security].default_scope`` ("docs" ou "code") no lugar."""
     document = _load(path)
@@ -57,7 +84,7 @@ def _save(path: Path, document: tomlkit.TOMLDocument) -> None:
     path.write_text(tomlkit.dumps(document), encoding="utf-8")
 
 
-def _assign(document: tomlkit.TOMLDocument, keys: tuple[str, ...], value: str | None) -> None:
+def _assign(document: tomlkit.TOMLDocument, keys: tuple[str, ...], value: str | int | None) -> None:
     table: Any = document
     for key in keys[:-1]:
         if key not in table:

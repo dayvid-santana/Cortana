@@ -12,7 +12,9 @@ class MarkdownNarrator:
     def __init__(self, parser: MarkdownParser | None = None) -> None:
         self.parser = parser or MarkdownParser()
 
-    def segments(self, text: str, section: str | None = None) -> list[NarrationSegment]:
+    def segments(
+        self, text: str, section: str | None = None, skip_code: bool = False
+    ) -> list[NarrationSegment]:
         source = self.parser.blocks(text)
         result: list[NarrationSegment] = []
         active = section is None
@@ -28,6 +30,8 @@ class MarkdownNarrator:
             elif block.kind == "list_item":
                 spoken = f"Item: {self._normalize(block.content)}."
             elif block.kind == "code":
+                if skip_code:
+                    continue
                 spoken = "Bloco de código omitido da narração."
             else:
                 spoken = self._normalize(block.content)
