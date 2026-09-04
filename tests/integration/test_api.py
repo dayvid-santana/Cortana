@@ -198,6 +198,37 @@ def test_web_projects_register_and_expose_real_files(
     assert content.json()["path"] == files[0]["path"]
 
 
+def test_web_projects_list_skips_a_registered_project_whose_directory_is_gone(
+    git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: a registered project's checkout can be moved/deleted afterwards (a
+    disposable temp repo, a renamed folder). Listing used to 500 — git discovery's
+    subprocess call raised a plain OSError, which only DevMateError was caught for."""
+    registry_path = tmp_path / "projects.json"
+    monkeypatch.setattr("devmate.api.app.projects", ProjectRegistry(registry_path))
+    client = TestClient(app)
+    kept = client.post("/api/v1/projects", json={"path": str(git_repo)}).json()
+
+    # Written directly (not via POST /projects, which requires a real git repo to
+    # register) so the "gone" entry never needs a real directory that would then have
+    # to be removed — sidesteps Windows file-locking on the entry's own SQLite handle.
+    registry_path.write_text(
+        json.dumps(
+            [
+                {"root": str(git_repo), "name": git_repo.name},
+                {"root": str(tmp_path / "never-existed"), "name": "gone"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    response = client.get("/api/v1/projects")
+
+    assert response.status_code == 200, response.text
+    ids = {item["id"] for item in response.json()["items"]}
+    assert ids == {kept["id"]}
+
+
 @contextmanager
 def _live_server() -> Iterator[str]:
     """A real uvicorn server on a real socket, for the two SSE tests below.

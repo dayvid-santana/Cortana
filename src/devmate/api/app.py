@@ -256,6 +256,11 @@ def _language(path: str) -> str:
 def list_projects() -> dict[str, list[dict[str, object]]]:
     items: list[dict[str, object]] = []
     for project in projects.list():
+        # A registered project's directory can be moved or deleted after registration
+        # (e.g. a disposable/temp checkout). Skip it instead of letting git discovery's
+        # subprocess call fail with an unhandled OSError that 500s the whole listing.
+        if not project.root.is_dir():
+            continue
         try:
             _, runtime = projects.runtime(project.id)
             items.append(_project_payload(project, runtime))
