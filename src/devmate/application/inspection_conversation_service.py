@@ -38,6 +38,9 @@ class InspectionConversationService:
         context = self.inspection.build(project_id, commit_ref, files or [], full_repo)
         # Lido antes de gravar a pergunta atual, para não duplicá-la no histórico.
         history = load_history(self.store, project_id, context.commit_hash)
+        previous_response_id = self.store.last_response_id(
+            project_id, context.commit_hash, provider_name
+        )
         request = LLMRequest(
             task="code_inspection",
             question=question,
@@ -46,11 +49,17 @@ class InspectionConversationService:
             system_instructions=system_instructions or CODE_INSPECTION_SYSTEM,
             model=model,
             history=history,
+            previous_response_id=previous_response_id,
         )
         provider = self.providers.get(provider_name)
         self.store.add_message(project_id, context.commit_hash, "user", question)
         response = provider.complete(request)
         self.store.add_message(
-            project_id, context.commit_hash, "assistant", response.text, provider_name
+            project_id,
+            context.commit_hash,
+            "assistant",
+            response.text,
+            provider_name,
+            response.response_id,
         )
         return Answer(context.commit_hash, response)

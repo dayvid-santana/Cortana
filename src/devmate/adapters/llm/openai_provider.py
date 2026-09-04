@@ -15,7 +15,11 @@ from devmate.errors import (
 
 
 def render_history(request: LLMRequest) -> str:
-    """Renderiza as rodadas anteriores como transcrição, nunca como instruções."""
+    """Renderiza as rodadas anteriores como transcrição, nunca como instruções.
+
+    Só é usado quando não há ``previous_response_id``: nesse caso a OpenAI já mantém
+    o histórico do lado dela, e reenviá-lo aqui pagaria os mesmos tokens duas vezes.
+    """
     if not request.history:
         return ""
     turns = "\n".join(f"{turn.role}: {turn.content}" for turn in request.history)
@@ -30,6 +34,12 @@ def render_history(request: LLMRequest) -> str:
 
 
 def render_input(request: LLMRequest) -> str:
+    """Turno inicial de uma thread: envia instruções, contexto do repositório e histórico local.
+
+    Usado quando não há ``previous_response_id`` — a primeira pergunta sobre um commit,
+    ou quando o histórico local não teve nenhuma resposta anterior da OpenAI para
+    continuar (ex.: provider trocado no meio da conversa).
+    """
     sections = []
     for chunk in request.chunks:
         sections.append(
@@ -46,6 +56,16 @@ def render_input(request: LLMRequest) -> str:
     )
 
 
+def render_continuation_input(request: LLMRequest) -> str:
+    """Turno de continuação: a OpenAI já tem instruções, contexto e histórico na thread.
+
+    Reenviar tudo de novo pagaria os mesmos tokens de entrada a cada pergunta; só a
+    pergunta nova precisa viajar. As instruções de segurança contra conteúdo não
+    confiável já foram estabelecidas no turno inicial da mesma thread.
+    """
+    return f"Pergunta da pessoa usuária: {request.question}"
+
+
 class OpenAIProvider:
     name = "openai"
 
@@ -58,6 +78,9 @@ class OpenAIProvider:
         self.model = model or "gpt-5"
         self._client_factory = client_factory
         self.base_url = base_url
+        # Preenchido por `stream()` ao final da resposta; `complete()` devolve o id
+        # diretamente em `LLMResponse.response_id`, sem precisar deste atributo.
+        self.last_response_id: str | None = None
 
     def available(self) -> tuple[bool, str | None]:
         if not os.getenv("OPENAI_API_KEY"):
@@ -79,6 +102,16 @@ class OpenAIProvider:
             return OpenAI(base_url=self.base_url)
         return OpenAI()
 
+    def _request_arguments(self, request: LLMRequest) -> dict[str, Any]:
+        """Turno de continuação: só a pergunta nova, apontando pra thread anterior."""
+        arguments: dict[str, Any] = {"model": request.model or self.model}
+        if request.previous_response_id:
+            arguments["previous_response_id"] = request.previous_response_id
+            arguments["input"] = render_continuation_input(request)
+        else:
+            arguments["input"] = render_input(request)
+        return arguments
+
     def complete(self, request: LLMRequest) -> LLMResponse:
         available, reason = self.available()
         if not available and self._client_factory is None:
@@ -86,14 +119,14 @@ class OpenAIProvider:
                 raise ProviderAuthenticationError(reason)
             raise ProviderUnavailableError(reason or "Provider indisponível.")
         try:
-            response = self._client().responses.create(
-                model=request.model or self.model, input=render_input(request)
-            )
+            response = self._client().responses.create(**self._request_arguments(request))
             text = getattr(response, "output_text", None)
             if not text:
                 raise ProviderResponseError("O provider retornou uma resposta vazia.")
             return LLMResponse(
-                text=str(text), references=tuple(chunk.reference for chunk in request.chunks)
+                text=str(text),
+                references=tuple(chunk.reference for chunk in request.chunks),
+                response_id=getattr(response, "id", None),
             )
         except ProviderResponseError:
             raise
@@ -107,15 +140,16 @@ class OpenAIProvider:
             if reason and "API_KEY" in reason:
                 raise ProviderAuthenticationError(reason)
             raise ProviderUnavailableError(reason or "Provider indisponível.")
+        self.last_response_id = None
         try:
-            with self._client().responses.stream(
-                model=request.model or self.model, input=render_input(request)
-            ) as stream:
+            with self._client().responses.stream(**self._request_arguments(request)) as stream:
                 for event in stream:
                     if getattr(event, "type", None) == "response.output_text.delta":
                         delta = getattr(event, "delta", "")
                         if delta:
                             yield str(delta)
+                final_response = stream.get_final_response()
+                self.last_response_id = getattr(final_response, "id", None)
         except (ProviderAuthenticationError, ProviderUnavailableError, ProviderResponseError):
             raise
         except Exception as exc:

@@ -242,6 +242,7 @@ class RepositoryStore:
         role: str,
         content: str,
         provider_name: str | None = None,
+        provider_response_id: str | None = None,
     ) -> None:
         with self._factory.begin() as session:
             session.add(
@@ -251,9 +252,32 @@ class RepositoryStore:
                     role=role,
                     content=content,
                     provider_name=provider_name,
+                    provider_response_id=provider_response_id,
                     created_at=utcnow(),
                 )
             )
+
+    def last_response_id(self, project_id: int, commit_hash: str, provider_name: str) -> str | None:
+        """ID da última resposta do provider nesta conversa, para continuar a thread.
+
+        Só é válido se a última rodada foi respondida pelo mesmo provider: trocar de
+        provider no meio da conversa invalida a continuidade do lado remoto.
+        """
+        with self._factory() as session:
+            statement: Select[tuple[ConversationMessageORM]] = (
+                select(ConversationMessageORM)
+                .where(
+                    ConversationMessageORM.project_id == project_id,
+                    ConversationMessageORM.commit_hash == commit_hash,
+                    ConversationMessageORM.role == "assistant",
+                )
+                .order_by(desc(ConversationMessageORM.created_at))
+                .limit(1)
+            )
+            item = session.scalar(statement)
+            if item is None or item.provider_name != provider_name:
+                return None
+            return item.provider_response_id
 
     def conversation(
         self, project_id: int, commit_hash: str, limit: int = 12

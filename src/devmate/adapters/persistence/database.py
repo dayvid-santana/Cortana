@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -36,8 +37,19 @@ def migrate_database(engine: Engine) -> None:
                     "USING fts5(path, content, commit_hash UNINDEXED)"
                 )
             )
+            # `create_all` só cria tabelas novas; bancos de projetos já inicializados
+            # precisam da coluna adicionada em colunas existentes por fora dele.
+            _ensure_column(
+                connection, "conversation_messages", "provider_response_id", "VARCHAR(255)"
+            )
     except Exception as exc:  # SQLAlchemy expõe subclasses por dialeto.
         raise DatabaseError(f"Não foi possível inicializar o banco: {exc}") from exc
+
+
+def _ensure_column(connection: Any, table: str, column: str, column_type: str) -> None:
+    existing = {row[1] for row in connection.execute(text(f"PRAGMA table_info({table})"))}
+    if column not in existing:
+        connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}"))
 
 
 def session_factory(engine: Engine) -> sessionmaker[Session]:

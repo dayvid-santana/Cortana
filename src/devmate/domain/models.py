@@ -88,6 +88,11 @@ class LLMRequest:
     system_instructions: str
     model: str | None = None
     history: tuple[ConversationTurn, ...] = ()
+    # ID da resposta anterior na thread do provider remoto (ex.: OpenAI Responses
+    # API). Quando presente, o provider pode continuar a conversa do lado dele em
+    # vez de reenviar `history`/`chunks` inteiros a cada turno; providers que não
+    # suportam esse recurso simplesmente ignoram o campo.
+    previous_response_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +100,9 @@ class LLMResponse:
     text: str
     references: tuple[SourceReference, ...] = field(default_factory=tuple)
     raw: str | None = None
+    # Preenchido pelos providers que suportam continuar a conversa do lado deles
+    # (ver `LLMRequest.previous_response_id`); None nos demais.
+    response_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

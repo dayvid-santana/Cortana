@@ -50,6 +50,9 @@ class ConversationService:
         commit, chunks = self.context.build(project_id, Scope.DOCS, commit_ref)
         # Lido antes de gravar a pergunta atual, para não duplicá-la no histórico.
         history = load_history(self.store, project_id, commit.commit_hash)
+        previous_response_id = self.store.last_response_id(
+            project_id, commit.commit_hash, provider_name
+        )
         request = LLMRequest(
             task="documentation_chat",
             question=question,
@@ -58,12 +61,18 @@ class ConversationService:
             system_instructions=system_instructions or DOCUMENTATION_CHAT_SYSTEM,
             model=model,
             history=history,
+            previous_response_id=previous_response_id,
         )
         provider = self.providers.get(provider_name)
         self.store.add_message(project_id, commit.commit_hash, "user", question)
         response = provider.complete(request)
         self.store.add_message(
-            project_id, commit.commit_hash, "assistant", response.text, provider_name
+            project_id,
+            commit.commit_hash,
+            "assistant",
+            response.text,
+            provider_name,
+            response.response_id,
         )
         return Answer(commit.commit_hash, response)
 
@@ -84,6 +93,9 @@ class ConversationService:
         """
         commit, chunks = self.context.build(project_id, Scope.DOCS, commit_ref)
         history = load_history(self.store, project_id, commit.commit_hash)
+        previous_response_id = self.store.last_response_id(
+            project_id, commit.commit_hash, provider_name
+        )
         request = LLMRequest(
             task="documentation_chat",
             question=question,
@@ -92,6 +104,7 @@ class ConversationService:
             system_instructions=system_instructions or DOCUMENTATION_CHAT_SYSTEM,
             model=model,
             history=history,
+            previous_response_id=previous_response_id,
         )
         provider = self.providers.get(provider_name)
         self.store.add_message(project_id, commit.commit_hash, "user", question)
@@ -100,7 +113,12 @@ class ConversationService:
             response = provider.complete(request)
             on_delta(response.text)
             self.store.add_message(
-                project_id, commit.commit_hash, "assistant", response.text, provider_name
+                project_id,
+                commit.commit_hash,
+                "assistant",
+                response.text,
+                provider_name,
+                response.response_id,
             )
             return Answer(commit.commit_hash, response)
         parts: list[str] = []
@@ -110,6 +128,13 @@ class ConversationService:
         text = "".join(parts)
         if not text:
             raise ProviderResponseError("O provider retornou uma resposta vazia.")
-        response = LLMResponse(text=text, references=tuple(chunk.reference for chunk in chunks))
-        self.store.add_message(project_id, commit.commit_hash, "assistant", text, provider_name)
+        response_id = getattr(provider, "last_response_id", None)
+        response = LLMResponse(
+            text=text,
+            references=tuple(chunk.reference for chunk in chunks),
+            response_id=response_id,
+        )
+        self.store.add_message(
+            project_id, commit.commit_hash, "assistant", text, provider_name, response_id
+        )
         return Answer(commit.commit_hash, response)

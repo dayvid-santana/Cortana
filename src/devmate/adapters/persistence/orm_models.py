@@ -161,6 +161,9 @@ class ConversationMessageORM(Base):
     role: Mapped[str] = mapped_column(String(16))
     content: Mapped[str] = mapped_column(Text)
     provider_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # ID da resposta na thread do provider remoto (ex.: OpenAI Responses API),
+    # para continuar a conversa sem reenviar o histórico inteiro a cada turno.
+    provider_response_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 

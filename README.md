@@ -145,13 +145,20 @@ uv sync --all-extras
 devmate listen --provider mock
 ```
 
-Para uma conversa contínua, `talk` mantém a Diana escutando entre as rodadas e reenvia o histórico ao provider, de modo que perguntas de acompanhamento como "e na parte de segurança?" são resolvidas com o contexto anterior. Diga "sair" ou "tchau" para encerrar:
+Para uma conversa contínua, `talk` mantém a Diana escutando entre as rodadas, de modo que perguntas de acompanhamento como "e na parte de segurança?" são resolvidas com o contexto anterior. Diga "sair" ou "tchau" para encerrar:
 
 ```bash
 devmate talk --provider mock
 ```
 
 Durante a conversa, diga **"Diana, leia o documento"** para narrar `README.md` localmente, ou **"Diana, o que você pode fazer?"** para ouvir as capacidades principais. Nenhum dos dois chama o provider de linguagem. Você pode acrescentar outros comandos em `[[voice.commands]]` no `.devmate/config.toml` e consultá-los com `diana commands`.
+
+### Como a memória da conversa é mantida
+
+Cada rodada é persistida localmente no SQLite do projeto (por commit), então a Diana lembra o que já foi dito mesmo entre execuções separadas do `devmate ask`. Como isso chega até o provider de linguagem depende do provider:
+
+- **`openai`**: usa o recurso nativo de thread da Responses API (`previous_response_id`). No primeiro turno de uma conversa (por commit), a Diana envia as instruções, o contexto do repositório e a pergunta; nos turnos seguintes, envia **só a pergunta nova** — a OpenAI mantém o restante do lado dela. Isso evita pagar de novo pelos mesmos tokens de contexto a cada pergunta. Se você trocar de provider no meio da conversa, o turno seguinte volta a enviar tudo (a thread anterior não é compatível com outro provider).
+- **Demais providers** (`mock`, `codex`, `openai_compatible`): continuam reenviando as últimas 12 rodadas como transcrição a cada pergunta, por não terem um equivalente de thread do lado do servidor.
 
 No primeiro uso, o modelo configurado (`base`) é baixado para `.devmate/models`; depois, a captura e a transcrição permanecem locais e o áudio não é salvo. Para mudar a janela de captura, use `--duration 15`. `--no-speak` mantém a transcrição e a resposta no terminal sem reproduzir áudio. Se for usado um provider remoto, somente a pergunta já transcrita — nunca a gravação — é enviada ao provider.
 
