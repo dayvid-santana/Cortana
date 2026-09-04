@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from devmate.adapters.audio.system_player import SystemAudioPlayer
+from devmate.adapters.speech.edge_provider import EdgeSpeechProvider
+from devmate.adapters.speech.elevenlabs_provider import ElevenLabsSpeechProvider
 from devmate.adapters.speech.faster_whisper_provider import FasterWhisperInputProvider
 from devmate.adapters.speech.null_input_provider import NullSpeechInputProvider
 from devmate.adapters.speech.null_provider import NullSpeechProvider
@@ -41,6 +43,25 @@ def get_speech_provider(
             cache_directory=cache_directory,
             player=SystemAudioPlayer(),
         )
+    if name == "elevenlabs":
+        cache_directory = (root / ".devmate" / PREVIEW_CACHE_SUBDIRECTORY) if root else None
+        return ElevenLabsSpeechProvider(
+            voice=selected_voice,
+            model=config.speech.providers.elevenlabs.model,
+            rate=config.speech.rate,
+            api_key_env=config.speech.providers.elevenlabs.api_key_env,
+            output_format=config.speech.providers.elevenlabs.output_format,
+            cache_directory=cache_directory,
+            player=SystemAudioPlayer(),
+        )
+    if name == "edge":
+        cache_directory = (root / ".devmate" / PREVIEW_CACHE_SUBDIRECTORY) if root else None
+        return EdgeSpeechProvider(
+            voice=selected_voice,
+            rate=config.speech.rate,
+            cache_directory=cache_directory,
+            player=SystemAudioPlayer(),
+        )
     raise ProviderNotFoundError(f"Provider de fala desconhecido: {name}")
 
 
@@ -54,6 +75,7 @@ def get_speech_input_provider(
             language=config.speech.input_language,
             duration_seconds=config.speech.input_duration_seconds,
             model_directory=model_directory,
+            silence_seconds=config.speech.input_silence_seconds,
         ),
     }
     try:

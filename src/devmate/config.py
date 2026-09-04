@@ -94,8 +94,20 @@ class OpenAISpeechProviderConfig(BaseModel):
     response_format: Literal["mp3", "opus", "aac", "flac", "wav", "pcm"] = "mp3"
 
 
+class ElevenLabsSpeechProviderConfig(BaseModel):
+    """Comportamento do provider de fala remoto; nunca guarda a credencial."""
+
+    model: str = "eleven_multilingual_v2"
+    api_key_env: str = Field(default="ELEVENLABS_API_KEY", min_length=1)
+    output_format: str = "mp3_44100_128"
+
+
 class SpeechProvidersConfig(BaseModel):
     openai: OpenAISpeechProviderConfig = Field(default_factory=OpenAISpeechProviderConfig)
+    elevenlabs: ElevenLabsSpeechProviderConfig = Field(
+        default_factory=ElevenLabsSpeechProviderConfig
+    )
+    # "edge" (Edge TTS) não tem configuração própria: é gratuito, sem chave de API.
 
 
 class SpeechConfig(BaseModel):
@@ -111,7 +123,11 @@ class SpeechConfig(BaseModel):
     input_provider: str = "faster_whisper"
     input_model: str = "base"
     input_language: str = "pt-BR"
-    input_duration_seconds: int = Field(default=10, ge=1, le=60)
+    # Teto de segurança da captura; a escuta normalmente encerra antes, por silêncio.
+    input_duration_seconds: int = Field(default=30, ge=1, le=60)
+    # Silêncio contínuo, após a fala começar, até a escuta encerrar. Dá margem
+    # para pausas de pensar sem cortar a pessoa no meio da frase.
+    input_silence_seconds: float = Field(default=2.0, ge=0.3, le=10.0)
 
 
 class VoiceCommandConfig(BaseModel):
@@ -231,10 +247,19 @@ DEFAULT_CONFIG_TOML = (
     "# Nome da variável de ambiente com a credencial; a chave nunca fica aqui.\n"
     'api_key_env = "OPENAI_API_KEY"\n'
     'response_format = "mp3"\n\n'
+    "[speech.providers.elevenlabs]\n"
+    'model = "eleven_multilingual_v2"\n'
+    "# Nome da variável de ambiente com a credencial; a chave nunca fica aqui.\n"
+    'api_key_env = "ELEVENLABS_API_KEY"\n'
+    'output_format = "mp3_44100_128"\n\n'
     'input_provider = "faster_whisper"\n'
     'input_model = "base"\n'
     'input_language = "pt-BR"\n'
-    "input_duration_seconds = 10\n\n"
+    "# Teto de segurança da captura; a escuta normalmente encerra antes, por silêncio.\n"
+    "input_duration_seconds = 30\n"
+    "# Silêncio contínuo, após a fala começar, até a escuta encerrar. Aumente para\n"
+    "# ter mais tempo de pausar e pensar sem ser cortado.\n"
+    "input_silence_seconds = 2.0\n\n"
     "# Acrescente novos blocos para criar comandos de voz locais.\n"
     "[[voice.commands]]\n"
     'phrases = ["leia o documento", "ler o documento"]\n'

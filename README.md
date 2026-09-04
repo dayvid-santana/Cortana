@@ -192,6 +192,21 @@ devmate voices choose
 
 Quando `speech.provider = "openai"`, a síntese acontece inteiramente na API da OpenAI e o áudio resultante é apenas reproduzido localmente — as vozes instaladas no Windows não participam da narração nesse modo. `devmate voices current` mostra o provider, a voz, o modelo e o ritmo em uso; `devmate doctor` inclui uma seção de fala com o status da credencial (nunca o valor) e do player de áudio.
 
+### Provider ElevenLabs
+
+Para narração com as vozes da biblioteca da ElevenLabs (`speech.provider = "elevenlabs"`):
+
+```bash
+export ELEVENLABS_API_KEY="..."
+
+devmate voices list --provider elevenlabs
+devmate voices preview EXAVITQu4vr4xnSDxMaL
+devmate voices set EXAVITQu4vr4xnSDxMaL
+devmate read docs/architecture.md
+```
+
+`devmate voices list --provider elevenlabs` consulta `GET /v1/voices` na conta configurada; sem credencial disponível, cai para o catálogo local de vozes públicas estáveis em `elevenlabs_catalog.py`. A síntese usa `POST /v1/text-to-speech/{voice_id}` (modelo padrão `eleven_multilingual_v2`) e o áudio é cacheado por `.devmate/cache/voice-previews/elevenlabs`, igual ao provider `openai`.
+
 ## API HTTP
 
 Uma camada HTTP fina expõe os mesmos application services usados pela CLI, para um frontend externo consumir. Ela nunca chama a CLI por subprocess nem duplica regras — monta `ConversationService`/`InspectionConversationService` diretamente, então escopo, segurança e citações são idênticos aos do `devmate ask`/`chat`.

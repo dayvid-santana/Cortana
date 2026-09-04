@@ -64,11 +64,15 @@ def _speech_checks(runtime: Runtime) -> list[Check]:
         Check("Speech voice", config.voice is not None, config.voice or "(padrão do provider)"),
     ]
     if capabilities.remote:
-        api_key_configured = getattr(speech, "api_key_configured", lambda: False)()
-        model_name = f"Speech model ({config.provider})"
-        checks.append(Check(model_name, True, config.providers.openai.model))
-        key_detail = "configured" if api_key_configured else "missing"
-        checks.append(Check("Speech API key", api_key_configured, key_detail))
+        model = getattr(speech, "model", None)
+        if model is not None:
+            checks.append(Check(f"Speech model ({config.provider})", True, model))
+        # Providers sem credencial (ex.: edge) não expõem `api_key_configured`.
+        api_key_configured_fn = getattr(speech, "api_key_configured", None)
+        if api_key_configured_fn is not None:
+            api_key_configured = api_key_configured_fn()
+            key_detail = "configured" if api_key_configured else "missing"
+            checks.append(Check("Speech API key", api_key_configured, key_detail))
         player = getattr(speech, "player", None)
         if player is not None:
             player_available, player_detail = player.available()

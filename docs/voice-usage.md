@@ -129,10 +129,17 @@ provider = "system"
 input_provider = "faster_whisper"
 input_model = "base"
 input_language = "pt-BR"
-input_duration_seconds = 10
+input_duration_seconds = 30
+input_silence_seconds = 2.0
 ```
 
 Modelos menores iniciam mais rapidamente; `base` é o equilíbrio padrão para português em CPU. A opção `--duration` substitui `input_duration_seconds` em uma única execução.
+
+### Pausas para pensar
+
+A captura não grava por um tempo fixo: ela começa a contar quando detecta sua voz e só encerra depois de `input_silence_seconds` de silêncio contínuo. Uma pausa para pensar no meio da frase não corta a escuta, desde que dure menos que isso — o silêncio antes de você começar a falar também não conta. `input_duration_seconds` continua existindo como teto de segurança, para a captura não ficar aberta indefinidamente.
+
+Se a Diana está encerrando a escuta cedo demais durante suas pausas, aumente `input_silence_seconds` (ex.: `3.0` ou `4.0`) em `.devmate/config.toml`.
 
 ### Vozes da OpenAI
 

@@ -1056,7 +1056,7 @@ def _voice_provider_and_list(
 @voices_app.command("list")
 def voices_list(
     provider: Annotated[
-        str | None, typer.Option("--provider", help="system, openai ou null.")
+        str | None, typer.Option("--provider", help="system, edge, openai, elevenlabs ou null.")
     ] = None,
     as_json: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:

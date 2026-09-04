@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +10,23 @@ from devmate.errors import SpeechRecognitionUnavailableError
 
 AudioRecorder = Callable[[int, int], Any]
 ModelFactory = Callable[[str, Path], Any]
+ChunkSource = Callable[[], Iterator[Any]]
+
+SAMPLE_RATE = 16_000
+FRAME_MS = 30
+FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS // 1000
+
+DEFAULT_SILENCE_SECONDS = 2.0
+DEFAULT_VOICE_THRESHOLD = 0.02
+
+
+def _is_voiced(frame: Any, threshold: float) -> bool:
+    """Corte por energia (RMS); simples e sem dependência nativa extra."""
+    import numpy as np
+
+    if frame.size == 0:
+        return False
+    return float(np.sqrt(np.mean(np.square(frame)))) > threshold
 
 
 class FasterWhisperInputProvider:
@@ -30,6 +47,9 @@ class FasterWhisperInputProvider:
         model_directory: Path,
         audio_recorder: AudioRecorder | None = None,
         model_factory: ModelFactory | None = None,
+        silence_seconds: float = DEFAULT_SILENCE_SECONDS,
+        voice_threshold: float = DEFAULT_VOICE_THRESHOLD,
+        chunk_source: ChunkSource | None = None,
     ) -> None:
         self.model_name = model_name
         self.language = language
@@ -38,6 +58,11 @@ class FasterWhisperInputProvider:
         self._audio_recorder = audio_recorder
         self._model_factory = model_factory
         self._loaded_model: Any | None = None
+        # Após detectar fala, quanto silêncio contínuo até encerrar a captura.
+        # Dá margem para a pessoa fazer uma pausa para pensar sem ser cortada.
+        self.silence_seconds = silence_seconds
+        self.voice_threshold = voice_threshold
+        self._chunk_source = chunk_source
 
     def available(self) -> tuple[bool, str | None]:
         try:
@@ -77,20 +102,66 @@ class FasterWhisperInputProvider:
             )
         return transcript
 
-    def _record(self, duration_seconds: int) -> Any:
+    def _record(self, max_duration_seconds: int) -> Any:
+        """Grava até ``silence_seconds`` de silêncio após a fala começar.
+
+        ``max_duration_seconds`` é um teto de segurança: se a pessoa nunca parar
+        de falar (ou o microfone captar só ruído), a captura ainda encerra.
+        """
         if self._audio_recorder is not None:
-            return self._audio_recorder(duration_seconds, 16_000)
+            return self._audio_recorder(max_duration_seconds, SAMPLE_RATE)
+        return self._record_until_silence(max_duration_seconds)
+
+    def _record_until_silence(self, max_duration_seconds: int) -> Any:
+        import numpy as np
+
+        silence_limit = max(1, round(self.silence_seconds * 1000 / FRAME_MS))
+        max_frames = max(1, round(max_duration_seconds * 1000 / FRAME_MS))
+
+        collected: list[Any] = []
+        speech_started = False
+        silence_run = 0
+        for index, frame in enumerate(self._frame_source(max_duration_seconds)):
+            collected.append(frame)
+            if _is_voiced(frame, self.voice_threshold):
+                speech_started = True
+                silence_run = 0
+            elif speech_started:
+                silence_run += 1
+                if silence_run >= silence_limit:
+                    break
+            if index + 1 >= max_frames:
+                break
+
+        if not collected:
+            return np.zeros(0, dtype="float32")
+        return np.concatenate(collected)
+
+    def _frame_source(self, max_duration_seconds: int) -> Iterator[Any]:
+        """Produz quadros de ~30ms; substituível em teste via ``chunk_source``."""
+        if self._chunk_source is not None:
+            yield from self._chunk_source()
+            return
+
+        import queue
+
         import sounddevice
 
-        frame_count = duration_seconds * 16_000
-        recording = sounddevice.rec(
-            frame_count,
-            samplerate=16_000,
+        frame_queue: queue.Queue[Any] = queue.Queue()
+
+        def callback(indata: Any, _frames: int, _time: Any, _status: Any) -> None:
+            frame_queue.put(indata.copy().reshape(-1))
+
+        max_frames = max(1, round(max_duration_seconds * 1000 / FRAME_MS))
+        with sounddevice.InputStream(
+            samplerate=SAMPLE_RATE,
             channels=1,
             dtype="float32",
-            blocking=True,
-        )
-        return recording.reshape(-1)
+            blocksize=FRAME_SAMPLES,
+            callback=callback,
+        ):
+            for _ in range(max_frames):
+                yield frame_queue.get()
 
     def _transcribe(self, audio: Any) -> str:
         model = self._model()
