@@ -65,3 +65,16 @@ class ChatResponse(BaseModel):
 class ErrorResponse(BaseModel):
     detail: str
     code: str
+
+
+class SpeechSettingsUpdate(BaseModel):
+    """Corpo de `PUT /projects/{id}/settings/speech`.
+
+    `rate` é opcional: omiti-lo preserva o valor já configurado, em vez de
+    sobrescrevê-lo com um placeholder inválido (foi exatamente esse bug, com o
+    frontend sempre mandando `rate: 1`, que corrompia `.devmate/config.toml`).
+    """
+
+    provider: str = Field(min_length=1)
+    voiceId: str = Field(min_length=1)
+    rate: int | None = Field(default=None, ge=80, le=450)

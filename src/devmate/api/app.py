@@ -31,6 +31,7 @@ from devmate.api.schemas import (
     ErrorResponse,
     HealthResponse,
     SourceReferenceOut,
+    SpeechSettingsUpdate,
     StatusResponse,
 )
 from devmate.application.conversation_service import ConversationService
@@ -186,6 +187,7 @@ def _project_status(project: RegisteredProject, runtime: Runtime) -> dict[str, o
         "lastScanAt": data["lastScanAt"],
         "defaultProvider": runtime.config.provider.default,
         "defaultVoice": runtime.config.speech.voice,
+        "defaultRate": runtime.config.speech.rate,
         "activeBranch": data["activeBranch"],
         "activeCommitHash": data["activeCommitHash"],
     }
@@ -688,24 +690,21 @@ def preview_voice_audio(voiceId: str, runtime: Runtime = Depends(_shared_runtime
 
 
 @app.put("/api/v1/projects/{project_id}/settings/speech")
-def update_speech_settings(project_id: str, body: dict[str, object]) -> dict[str, object]:
+def update_speech_settings(project_id: str, body: SpeechSettingsUpdate) -> dict[str, object]:
     project, runtime = _runtime(project_id)
     del project
     config_path = runtime.root / ".devmate" / "config.toml"
 
-    provider_name = body.get("provider")
-    if not isinstance(provider_name, str) or provider_name not in _KNOWN_SPEECH_PROVIDERS:
-        raise UnsafePathError(f"Provider de fala desconhecido: {provider_name!r}")
-    voice_id = body.get("voiceId")
-    if not isinstance(voice_id, str) or not voice_id:
-        raise UnsafePathError("voiceId é obrigatório.")
+    if body.provider not in _KNOWN_SPEECH_PROVIDERS:
+        raise UnsafePathError(f"Provider de fala desconhecido: {body.provider!r}")
+    provider_name = body.provider
+    voice_id = body.voiceId
     set_speech_voice(config_path, voice_id, provider_name)
 
-    rate = body.get("rate")
-    if rate is not None:
-        if not isinstance(rate, int | float):
-            raise UnsafePathError("rate deve ser numérico.")
-        set_speech_rate(config_path, int(rate))
+    # `rate` é opcional: omitido, preserva o valor já configurado em vez de
+    # sobrescrevê-lo — trocar de voz não deveria mexer no ritmo de fala.
+    if body.rate is not None:
+        set_speech_rate(config_path, body.rate)
 
     _, refreshed = _runtime(project_id)
     speech = get_speech_provider(provider_name, refreshed.config, refreshed.root)

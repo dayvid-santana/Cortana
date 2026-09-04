@@ -168,6 +168,43 @@ def test_speech_settings_update_rejects_an_unknown_provider(
     assert response.status_code == 400
 
 
+def test_speech_settings_update_without_rate_preserves_the_existing_rate(
+    web_client: TestClient, git_repo: Path
+) -> None:
+    """Regressão: trocar de voz não deve zerar o ritmo de fala configurado."""
+    project = _register(web_client, git_repo)
+    web_client.put(
+        f"/api/v1/projects/{project['id']}/settings/speech",
+        json={"provider": "openai", "voiceId": "marin", "rate": 220},
+    )
+
+    switched = web_client.put(
+        f"/api/v1/projects/{project['id']}/settings/speech",
+        json={"provider": "openai", "voiceId": "cedar"},
+    )
+
+    assert switched.status_code == 200, switched.text
+    assert switched.json()["rate"] == 220
+    config_text = (git_repo / ".devmate" / "config.toml").read_text(encoding="utf-8")
+    assert "rate = 220" in config_text
+
+
+def test_speech_settings_update_rejects_a_rate_below_the_minimum(
+    web_client: TestClient, git_repo: Path
+) -> None:
+    """Regressão: um `rate` inválido nunca deve chegar a corromper config.toml."""
+    project = _register(web_client, git_repo)
+
+    response = web_client.put(
+        f"/api/v1/projects/{project['id']}/settings/speech",
+        json={"provider": "openai", "voiceId": "marin", "rate": 1},
+    )
+
+    assert response.status_code == 422
+    config_text = (git_repo / ".devmate" / "config.toml").read_text(encoding="utf-8")
+    assert "rate = 1\n" not in config_text
+
+
 def test_reading_session_verbatim_keeps_the_literal_markdown(
     web_client: TestClient, git_repo: Path
 ) -> None:
