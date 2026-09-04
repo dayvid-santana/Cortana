@@ -12,7 +12,7 @@ from devmate.application.context_service import ContextService
 from devmate.application.working_tree_cache import WorkingTreeCache
 from devmate.constants import SOURCE_FILE_EXTENSIONS, is_excluded_directory
 from devmate.domain.models import ContextChunk
-from devmate.errors import UnsafePathError
+from devmate.errors import GitCommandError, UnsafePathError
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,7 +67,7 @@ class InspectionService:
             content = (
                 working_tree.get(relative)
                 if working_tree is not None
-                else self.context.git.file_at_commit(commit.commit_hash, relative)
+                else self._content_at_commit_or_disk(commit.commit_hash, relative)
             )
             code.append((relative, content))
         return InspectionContext(
@@ -75,6 +75,18 @@ class InspectionService:
             docs + self.context.code_chunks(commit.commit_hash, code),
             code_files=tuple(code),
         )
+
+    def _content_at_commit_or_disk(self, commit_hash: str, relative: str) -> str:
+        """`_source_files()` seleciona pelo que existe no disco agora; um arquivo
+        criado depois do commit selecionado (ainda não commitado) existe no disco mas
+        não em `git show <commit>:...`. Sem isto, essa combinação — bem comum enquanto
+        se programa — derrubava a pergunta inteira com um erro de git cru, mesmo fora
+        do modo `live`. Cai pro conteúdo do disco só para esse arquivo específico."""
+        try:
+            return self.context.git.file_at_commit(commit_hash, relative)
+        except GitCommandError:
+            _path, content, _hash = self.filesystem.read_text(relative)
+            return content
 
     def _source_files(self) -> list[str]:
         results: list[str] = []

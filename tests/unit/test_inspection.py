@@ -35,6 +35,40 @@ def test_inspection_reads_only_explicit_code_at_selected_commit(git_repo: Path) 
     assert context.code_files == (("src/app.py", "AUTH = 'jwt'\n"),)
 
 
+def test_full_repo_with_a_file_created_after_the_selected_commit_falls_back_to_disk(
+    git_repo: Path,
+) -> None:
+    """Regressão: `--full-repo` seleciona pelo que existe no disco agora; um arquivo
+    criado depois do commit escolhido (ainda sem commit) existe no disco mas não em
+    `git show <commit>:...` — isso derrubava a pergunta inteira com um erro de git
+    cru, mesmo fora do modo `live`."""
+    source = git_repo / "src"
+    source.mkdir()
+    (source / "app.py").write_text("AUTH = 'jwt'\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "src/app.py"], cwd=git_repo, check=True, capture_output=True, text=True
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "feat: adiciona implementação"],
+        cwd=git_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    initialize_project(git_repo)
+    runtime = load_runtime(git_repo)
+    runtime.scan_service().scan(runtime.project_id)
+
+    # Criado depois do commit indexado, sem commitar — não existe naquele commit.
+    (source / "novo.py").write_text("NOVO = True\n", encoding="utf-8")
+
+    context = runtime.inspection_service().build(runtime.project_id, None, [], full_repo=True)
+
+    files = dict(context.code_files)
+    assert files["src/app.py"] == "AUTH = 'jwt'\n"
+    assert files["src/novo.py"] == "NOVO = True\n"
+
+
 def test_live_mode_reads_uncommitted_changes_from_disk_instead_of_the_commit(
     git_repo: Path,
 ) -> None:
