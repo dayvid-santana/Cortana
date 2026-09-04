@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -36,6 +37,7 @@ from devmate.api.schemas import (
     StatusResponse,
 )
 from devmate.application.doctor_service import doctor
+from devmate.application.edit_service import ProposedFileChange
 from devmate.application.reading_session_service import (
     ReadingSegment,
     build_segments,
@@ -53,8 +55,9 @@ from devmate.config_writer import (
 )
 from devmate.domain.ports import LanguageModelProvider, SpeechProvider
 from devmate.domain.speech import DEFAULT_VOICE_PREVIEW_TEXT, SpeechRequest, VoiceInfo
-from devmate.errors import DevMateError, UnsafePathError
+from devmate.errors import DevAgentUnavailableError, DevMateError, UnsafePathError
 from devmate.prompts.api_chat import API_CHAT_SYSTEM
+from devmate.prompts.code_edit import CODE_EDIT_SYSTEM
 
 _KNOWN_LLM_PROVIDERS = ("mock", "codex", "openai", "openai_compatible")
 _KNOWN_SPEECH_PROVIDERS = ("system", "openai", "elevenlabs", "edge")
@@ -751,6 +754,12 @@ def update_speech_settings(project_id: str, body: SpeechSettingsUpdate) -> dict[
 _reading_sessions: dict[str, dict[str, Any]] = {}
 _reading_sessions_lock = Lock()
 
+# Propostas de edição pendentes de confirmação, por id. Efêmero — como `_runs` e
+# `_reading_sessions` — vive só enquanto o processo do servidor está de pé; recarregar
+# a página perde a chance de aplicar uma proposta ainda não confirmada.
+_edit_proposals: dict[str, dict[str, Any]] = {}
+_edit_proposals_lock = Lock()
+
 
 def _reading_session_payload(session: dict[str, Any], runtime: Runtime) -> dict[str, object]:
     try:
@@ -943,8 +952,8 @@ def create_chat_run(project_id: str, body: dict[str, object]) -> dict[str, str]:
     _, runtime = _runtime(project_id)
     message = str(body.get("message", "")).strip()
     scope = str(body.get("scope", "docs"))
-    if not message or scope not in {"docs", "code"}:
-        raise UnsafePathError("message e scope (docs/code) são obrigatórios.")
+    if not message or scope not in {"docs", "code", "edit"}:
+        raise UnsafePathError("message e scope (docs/code/edit) são obrigatórios.")
     commit = runtime.git.resolve_commit(str(body.get("commitHash") or "HEAD"))
     thread_id = str(body.get("threadId") or uuid4().hex)
     thread = runtime.store.thread(runtime.project_id, thread_id)
@@ -988,6 +997,148 @@ def _emit(state: dict[str, Any], event: dict[str, object]) -> None:
         cast(list[dict[str, object]], state["events"]).append(event)
 
 
+_DIFF_FILE_HEADER = re.compile(r"^diff --git a/(?P<a>.+?) b/(?P<b>.+?)$", re.MULTILINE)
+
+
+def _split_diff_by_file(diff_text: str) -> list[dict[str, str]]:
+    """Quebra um diff unificado de vários arquivos (como o do dev-agent) em blocos por
+    arquivo, pro chat mostrar um cartão de diff por arquivo, igual ao caminho direto."""
+    if not diff_text.strip():
+        return []
+    matches = list(_DIFF_FILE_HEADER.finditer(diff_text))
+    if not matches:
+        return [{"path": "(diff)", "diff": diff_text}]
+    files = []
+    for index, match in enumerate(matches):
+        start = match.start()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(diff_text)
+        files.append({"path": match.group("b"), "diff": diff_text[start:end].rstrip("\n")})
+    return files
+
+
+def _propose_edit_via_dev_agent(
+    runtime: Runtime, message: str
+) -> tuple[str, dict[str, object] | None]:
+    """Tenta o caminho preferido: plano revisável do dev-agent, executado num worktree
+    isolado. ``None`` no segundo valor sinaliza "não consegui" — indisponível, precisa de
+    aprovação de arquitetura que o chat não sabe dar, ou o job não terminou com sucesso —
+    e quem chamou deve cair para a proposta direta via LLM."""
+    service = runtime.dev_agent_edit_service()
+    available, _reason = service.client.available()
+    if not available:
+        return "", None
+    try:
+        plan = service.propose(message)
+    except DevAgentUnavailableError:
+        return "", None
+    if plan.architecture_decision_required:
+        return "", None
+    config = runtime.config.edit
+    poll, timeout = config.dev_agent_poll_seconds, config.dev_agent_timeout_seconds
+    try:
+        result = service.run(plan.id, poll, timeout)
+    except DevAgentUnavailableError:
+        return "", None
+    if not result.succeeded or not result.has_changes:
+        return "", None
+    proposal_id = uuid4().hex
+    with _edit_proposals_lock:
+        _edit_proposals[proposal_id] = {
+            "projectId": runtime.project_id,
+            "engine": "dev_agent",
+            "jobId": result.job_id,
+            "diff": result.diff,
+            "applied": False,
+        }
+    edit_payload: dict[str, object] = {
+        "id": proposal_id,
+        "applied": False,
+        "engine": "dev_agent",
+        "files": _split_diff_by_file(result.diff),
+    }
+    return plan.objective, edit_payload
+
+
+def _propose_edit_via_llm(
+    runtime: Runtime, message: str, provider: str, commit: str
+) -> tuple[str, dict[str, object]]:
+    """Caminho de reserva: uma única chamada de LLM propõe o arquivo inteiro, sem
+    worktree isolado. Usado quando o dev-agent não está disponível ou não consegue."""
+    proposal = runtime.edit_service().propose(
+        runtime.project_id,
+        message,
+        provider,
+        commit,
+        [],
+        True,
+        None,
+        CODE_EDIT_SYSTEM,
+        "code_edit",
+    )
+    changed = [change for change in proposal.changes if change.changed]
+    proposal_id = uuid4().hex
+    with _edit_proposals_lock:
+        _edit_proposals[proposal_id] = {
+            "projectId": runtime.project_id,
+            "engine": "llm",
+            "changes": changed,
+            "applied": False,
+        }
+    edit_payload: dict[str, object] = {
+        "id": proposal_id,
+        "applied": False,
+        "engine": "llm",
+        "files": [{"path": change.path, "diff": change.diff} for change in changed],
+    }
+    return proposal.narrative, edit_payload
+
+
+def _run_edit_chat(
+    state: dict[str, Any], runtime: Runtime, message: str, provider: str, commit: str
+) -> None:
+    """Propõe uma edição de código pelo chat; nunca escreve — só ``apply_edit_proposal``
+    (depois de confirmação explícita) grava algo em disco.
+
+    O dev-agent (plano revisável + worktree isolado) é o caminho preferido; a Diana só
+    edita direto por conta própria quando ele não está disponível ou não dá conta.
+    """
+    run_id = cast(str, state["id"])
+    narrative, edit_payload = _propose_edit_via_dev_agent(runtime, message)
+    if edit_payload is None:
+        narrative, edit_payload = _propose_edit_via_llm(runtime, message, provider, commit)
+    if cast(Event, state["cancelled"]).is_set():
+        return
+    _emit(state, {"type": "tool.completed", "runId": run_id, "tool": "repository_context"})
+    _emit(state, {"type": "assistant.delta", "runId": run_id, "delta": narrative})
+    message_id = uuid4().hex
+    thread_id = cast(str, state["threadId"])
+    created_at = datetime.now(UTC).isoformat()
+    runtime.store.add_web_message(
+        message_id, thread_id, "assistant", narrative, "edit", "complete", provider, None
+    )
+    state["status"] = "completed"
+    _emit(
+        state,
+        {
+            "type": "run.completed",
+            "runId": run_id,
+            "message": {
+                "id": message_id,
+                "threadId": thread_id,
+                "role": "assistant",
+                "content": narrative,
+                "createdAt": created_at,
+                "scope": "edit",
+                "provider": provider,
+                "model": None,
+                "sources": [],
+                "status": "complete",
+                "editProposal": edit_payload,
+            },
+        },
+    )
+
+
 def _execute_chat_run(
     state: dict[str, Any], runtime: Runtime, message: str, scope: str, provider: str, commit: str
 ) -> None:
@@ -999,6 +1150,9 @@ def _execute_chat_run(
         _emit(state, {"type": "run.started", "runId": run_id})
         _emit(state, {"type": "tool.started", "runId": run_id, "tool": "repository_context"})
         if cancelled.is_set():
+            return
+        if scope == "edit":
+            _run_edit_chat(state, runtime, message, provider, commit)
             return
         if scope == "docs":
             result = runtime.conversation_service().ask_stream(
@@ -1092,6 +1246,37 @@ def _execute_chat_run(
             state["status"] = "cancelled"
             _emit(state, {"type": "run.completed", "runId": run_id, "cancelled": True})
         terminal.set()
+
+
+@app.post("/api/v1/projects/{project_id}/edit-proposals/{proposal_id}/apply")
+def apply_edit_proposal(project_id: str, proposal_id: str) -> dict[str, object]:
+    """Único ponto que grava em disco uma edição vinda do chat — só depois que a
+    pessoa usuária confirmou explicitamente na conversa (texto ou voz)."""
+    _, runtime = _runtime(project_id)
+    with _edit_proposals_lock:
+        stored = _edit_proposals.get(proposal_id)
+        if stored is None:
+            raise UnsafePathError("Proposta de edição desconhecida ou expirada.")
+        if stored["projectId"] != runtime.project_id:
+            raise UnsafePathError("Proposta de edição pertence a outro projeto.")
+        if stored["applied"]:
+            raise UnsafePathError("Esta proposta já foi aplicada.")
+        stored["applied"] = True
+        engine = stored["engine"]
+    if engine == "dev_agent":
+        service = runtime.dev_agent_edit_service()
+        service.apply(cast(str, stored["diff"]))
+        service.cleanup(cast(str, stored["jobId"]))
+        return {"id": proposal_id, "applied": True, "engine": "dev_agent"}
+    changes = cast(list[ProposedFileChange], stored["changes"])
+    for change in changes:
+        runtime.filesystem.write_text(change.path, change.proposed)
+    return {
+        "id": proposal_id,
+        "applied": True,
+        "engine": "llm",
+        "files": [change.path for change in changes],
+    }
 
 
 @app.get("/api/v1/runs/{run_id}")
