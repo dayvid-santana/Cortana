@@ -67,6 +67,14 @@ class ErrorResponse(BaseModel):
     code: str
 
 
+class SpeakRequest(BaseModel):
+    """Corpo de `POST /projects/{id}/speech/say`: narra texto arbitrário (ex.: a
+    resposta de uma rodada de chat) com o provider/voz configurados do projeto —
+    diferente de `/speech/voices/preview`, que sempre narra o mesmo texto fixo."""
+
+    text: str = Field(min_length=1, max_length=4000)
+
+
 class SpeechSettingsUpdate(BaseModel):
     """Corpo de `PUT /projects/{id}/settings/speech`.
 

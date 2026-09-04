@@ -146,6 +146,40 @@ def test_preview_rejects_a_local_only_voice_with_a_clear_error(client: TestClien
     assert "fala direto no dispositivo local" in response.json()["detail"]
 
 
+def test_speak_rejects_a_local_only_provider_with_a_clear_error(
+    web_client: TestClient, git_repo: Path
+) -> None:
+    """Regressão: o "modo de voz" do chat precisa de um erro claro quando o provider
+    configurado (padrão "system") não gera áudio pro navegador — nunca deveria cair
+    de volta no window.speechSynthesis do navegador em silêncio."""
+    project = _register(web_client, git_repo)
+
+    response = web_client.post(
+        f"/api/v1/projects/{project['id']}/speech/say", json={"text": "Olá, tudo bem?"}
+    )
+
+    assert response.status_code == 400
+    assert "fala direto no dispositivo local" in response.json()["detail"]
+
+
+def test_speak_rejects_empty_text(web_client: TestClient, git_repo: Path) -> None:
+    project = _register(web_client, git_repo)
+
+    response = web_client.post(f"/api/v1/projects/{project['id']}/speech/say", json={"text": ""})
+
+    assert response.status_code == 422
+
+
+def test_speak_rejects_text_over_the_length_limit(web_client: TestClient, git_repo: Path) -> None:
+    project = _register(web_client, git_repo)
+
+    response = web_client.post(
+        f"/api/v1/projects/{project['id']}/speech/say", json={"text": "x" * 4001}
+    )
+
+    assert response.status_code == 422
+
+
 def test_speech_settings_update_persists_provider_and_voice(
     web_client: TestClient, git_repo: Path
 ) -> None:

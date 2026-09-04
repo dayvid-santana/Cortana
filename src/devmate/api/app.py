@@ -31,6 +31,7 @@ from devmate.api.schemas import (
     ErrorResponse,
     HealthResponse,
     SourceReferenceOut,
+    SpeakRequest,
     SpeechSettingsUpdate,
     StatusResponse,
 )
@@ -681,6 +682,32 @@ def preview_voice_audio(voiceId: str, runtime: Runtime = Depends(_shared_runtime
             text=DEFAULT_VOICE_PREVIEW_TEXT, voice=voice.id, rate=runtime.config.speech.rate
         )
     )
+    if result.audio_path is None:
+        raise UnsafePathError("O provider de fala não retornou um arquivo de áudio.")
+    media_type = _AUDIO_MEDIA_TYPES.get(
+        getattr(speech, "response_format", "mp3"), "application/octet-stream"
+    )
+    return Response(content=result.audio_path.read_bytes(), media_type=media_type)
+
+
+@app.post("/api/v1/projects/{project_id}/speech/say")
+def speak_text(project_id: str, body: SpeakRequest) -> Response:
+    """Narra texto arbitrário com o provider/voz configurados do projeto.
+
+    Diferente do preview (texto fixo, qualquer voz por id), isto usa exatamente o
+    que `.devmate/config.toml` tem configurado — é o que o "modo de voz" do chat
+    deveria chamar, em vez do `window.speechSynthesis` do navegador (que ignora
+    completamente a voz escolhida no DevMate).
+    """
+    _, runtime = _runtime(project_id)
+    speech = runtime.reading_service().speech
+    if not speech.capabilities().produces_audio_files:
+        raise UnsafePathError(
+            f"O provider de fala '{speech.name}' fala direto no dispositivo local e não "
+            "gera um arquivo de áudio para o navegador. Troque para um provider remoto "
+            "(edge, openai, elevenlabs) nas configurações de voz do projeto."
+        )
+    result = speech.synthesize(SpeechRequest(text=body.text))
     if result.audio_path is None:
         raise UnsafePathError("O provider de fala não retornou um arquivo de áudio.")
     media_type = _AUDIO_MEDIA_TYPES.get(
