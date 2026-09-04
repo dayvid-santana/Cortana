@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from devmate.adapters.llm.registry import ProviderRegistry
 from devmate.adapters.persistence.repositories import RepositoryStore
 from devmate.application.context_service import ContextService
+from devmate.application.project_memory_service import ProjectMemoryService
 from devmate.domain.enums import Scope
 from devmate.domain.models import ConversationTurn, LLMRequest, LLMResponse
 from devmate.errors import ProviderResponseError
@@ -32,11 +33,21 @@ def load_history(
 
 class ConversationService:
     def __init__(
-        self, store: RepositoryStore, context: ContextService, providers: ProviderRegistry
+        self,
+        store: RepositoryStore,
+        context: ContextService,
+        providers: ProviderRegistry,
+        memory: ProjectMemoryService | None = None,
     ) -> None:
         self.store = store
         self.context = context
         self.providers = providers
+        self.memory = memory
+
+    def _system_instructions(self, override: str | None, default: str) -> str:
+        base = override or default
+        extra = self.memory.render() if self.memory else ""
+        return f"{base}\n\n{extra}" if extra else base
 
     def ask(
         self,
@@ -58,7 +69,9 @@ class ConversationService:
             question=question,
             scope=Scope.DOCS,
             chunks=chunks,
-            system_instructions=system_instructions or DOCUMENTATION_CHAT_SYSTEM,
+            system_instructions=self._system_instructions(
+                system_instructions, DOCUMENTATION_CHAT_SYSTEM
+            ),
             model=model,
             history=history,
             previous_response_id=previous_response_id,
@@ -101,7 +114,9 @@ class ConversationService:
             question=question,
             scope=Scope.DOCS,
             chunks=chunks,
-            system_instructions=system_instructions or DOCUMENTATION_CHAT_SYSTEM,
+            system_instructions=self._system_instructions(
+                system_instructions, DOCUMENTATION_CHAT_SYSTEM
+            ),
             model=model,
             history=history,
             previous_response_id=previous_response_id,

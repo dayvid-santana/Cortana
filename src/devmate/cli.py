@@ -25,7 +25,6 @@ from devmate.application.codex_connection_service import (
     CodexLoginPrompt,
     LoginMethod,
 )
-from devmate.application.conversation_service import ConversationService
 from devmate.application.daemon_service import DaemonService
 from devmate.application.doctor_service import doctor
 from devmate.application.edit_service import EditProposal, ProposedFileChange
@@ -154,9 +153,7 @@ def scan(
     if analyze and not metadata_only:
         name = provider or runtime.config.provider.default
         _run(
-            lambda: ConversationService(
-                runtime.store, runtime.context_service(), runtime.providers
-            ).ask(
+            lambda: runtime.conversation_service().ask(
                 runtime.project_id,
                 "Resuma as mudanças documentais deste commit.",
                 name,
@@ -259,9 +256,7 @@ def ask(
         return
     _ensure_indexed(runtime, commit)
     answer = _run(
-        lambda: ConversationService(
-            runtime.store, runtime.context_service(), runtime.providers
-        ).ask(
+        lambda: runtime.conversation_service().ask(
             runtime.project_id, question, provider or runtime.config.provider.default, commit, model
         ),
         as_json,
@@ -285,7 +280,7 @@ def chat(
     if runtime is None:
         return
     _ensure_indexed(runtime, commit)
-    service = ConversationService(runtime.store, runtime.context_service(), runtime.providers)
+    service = runtime.conversation_service()
     selected = _run(lambda: runtime.context_service().selected_commit(runtime.project_id, commit))
     if selected is None:
         return

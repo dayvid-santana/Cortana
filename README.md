@@ -152,6 +152,21 @@ exigir uma decisão de arquitetura própria do dev-agent, a Diana para e pede pa
 diretamente pelo `dev-agent run <plan_id> --confirm` antes de tentar de novo. Se o dev-agent não
 estiver rodando, o erro chega claro (`dev-agent não está respondendo em ...`), sem travar.
 
+## Memória do projeto
+
+Diferente da busca por trechos relevantes (que muda a cada pergunta), a Diana também lê um conjunto fixo de arquivos — `AGENTS.md` por padrão — e injeta o conteúdo em toda conversa (`ask`, `talk`, `chat`, `listen`), como se ela já soubesse as convenções do projeto de antemão. Isso evita depender da busca "encontrar" essa informação, e — combinado com a continuação de thread da OpenAI (`previous_response_id`, ver seção de Providers) — só pesa no primeiro turno de cada conversa; os turnos seguintes não pagam por esse contexto de novo.
+
+Configurável em `.devmate/config.toml`:
+
+```toml
+[memory]
+enabled = true
+files = ["AGENTS.md"]
+max_chars = 4000
+```
+
+Arquivos ausentes são ignorados em silêncio (não é erro não ter `AGENTS.md`); arquivos maiores que `max_chars` são truncados. Segue as mesmas travas de segurança de qualquer leitura do DevMate — nunca lê arquivos que batam com `security.ignored_patterns` (`.env`, `*.key`, etc.), mesmo que configurados aqui por engano.
+
 ## Leitura em voz alta
 
 ```bash

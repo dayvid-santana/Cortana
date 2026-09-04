@@ -34,9 +34,7 @@ from devmate.api.schemas import (
     SpeechSettingsUpdate,
     StatusResponse,
 )
-from devmate.application.conversation_service import ConversationService
 from devmate.application.doctor_service import doctor
-from devmate.application.inspection_conversation_service import InspectionConversationService
 from devmate.application.reading_session_service import (
     ReadingSegment,
     build_segments,
@@ -976,9 +974,7 @@ def _execute_chat_run(
         if cancelled.is_set():
             return
         if scope == "docs":
-            result = ConversationService(
-                runtime.store, runtime.context_service(), runtime.providers
-            ).ask_stream(
+            result = runtime.conversation_service().ask_stream(
                 runtime.project_id,
                 message,
                 provider,
@@ -992,9 +988,9 @@ def _execute_chat_run(
                 API_CHAT_SYSTEM,
             )
         else:
-            result = InspectionConversationService(
-                runtime.inspection_service(), runtime.store, runtime.providers
-            ).ask(runtime.project_id, message, provider, commit, None, None, True, API_CHAT_SYSTEM)
+            result = runtime.inspection_conversation_service().ask(
+                runtime.project_id, message, provider, commit, None, None, True, API_CHAT_SYSTEM
+            )
         _emit(state, {"type": "tool.completed", "runId": run_id, "tool": "repository_context"})
         if cancelled.is_set():
             return
@@ -1169,9 +1165,7 @@ def chat(body: ChatRequest, runtime: Runtime = Depends(get_runtime)) -> ChatResp
     runtime.ensure_indexed(body.commit)
 
     if body.scope == "code":
-        inspection_conversation = InspectionConversationService(
-            runtime.inspection_service(), runtime.store, runtime.providers
-        )
+        inspection_conversation = runtime.inspection_conversation_service()
         answer = inspection_conversation.ask(
             runtime.project_id,
             body.question,
@@ -1189,9 +1183,7 @@ def chat(body: ChatRequest, runtime: Runtime = Depends(get_runtime)) -> ChatResp
             raise UnsafePathError(
                 "files/full_repo exigem scope=code; scope=docs nunca inclui código."
             )
-        conversation = ConversationService(
-            runtime.store, runtime.context_service(), runtime.providers
-        )
+        conversation = runtime.conversation_service()
         answer = conversation.ask(
             runtime.project_id,
             body.question,

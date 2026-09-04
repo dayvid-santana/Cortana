@@ -24,6 +24,7 @@ from devmate.application.inspection_conversation_service import InspectionConver
 from devmate.application.inspection_service import InspectionService
 from devmate.application.instance_lock import InstanceLock
 from devmate.application.memory_service import MemoryService
+from devmate.application.project_memory_service import ProjectMemoryService
 from devmate.application.reading_service import ReadingService
 from devmate.application.scan_service import ScanService
 from devmate.application.voice_service import VoiceCommand, VoiceConversationService
@@ -112,15 +113,29 @@ class Runtime:
     def daemon_lock(self) -> InstanceLock:
         return InstanceLock(self.root / ".devmate" / "daemon.lock")
 
+    def project_memory_service(self) -> ProjectMemoryService:
+        memory = self.config.memory
+        return ProjectMemoryService(
+            self.filesystem, tuple(memory.files), memory.max_chars, memory.enabled
+        )
+
+    def conversation_service(self) -> ConversationService:
+        return ConversationService(
+            self.store, self.context_service(), self.providers, self.project_memory_service()
+        )
+
+    def inspection_conversation_service(self) -> InspectionConversationService:
+        return InspectionConversationService(
+            self.inspection_service(), self.store, self.providers, self.project_memory_service()
+        )
+
     def voice_service(
         self, input_provider: SpeechInputProvider | None = None
     ) -> VoiceConversationService:
         output = self.speech_provider()
         input_provider = input_provider or self.speech_input()
-        conversation = ConversationService(self.store, self.context_service(), self.providers)
-        inspection_conversation = InspectionConversationService(
-            self.inspection_service(), self.store, self.providers
-        )
+        conversation = self.conversation_service()
+        inspection_conversation = self.inspection_conversation_service()
         return VoiceConversationService(
             input_provider,
             output,

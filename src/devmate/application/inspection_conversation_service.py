@@ -6,6 +6,7 @@ from devmate.adapters.llm.registry import ProviderRegistry
 from devmate.adapters.persistence.repositories import RepositoryStore
 from devmate.application.conversation_service import Answer, load_history
 from devmate.application.inspection_service import InspectionService
+from devmate.application.project_memory_service import ProjectMemoryService
 from devmate.domain.enums import Scope
 from devmate.domain.models import LLMRequest
 from devmate.prompts.code_inspection import CODE_INSPECTION_SYSTEM
@@ -19,10 +20,17 @@ class InspectionConversationService:
         inspection: InspectionService,
         store: RepositoryStore,
         providers: ProviderRegistry,
+        memory: ProjectMemoryService | None = None,
     ) -> None:
         self.inspection = inspection
         self.store = store
         self.providers = providers
+        self.memory = memory
+
+    def _system_instructions(self, override: str | None, default: str) -> str:
+        base = override or default
+        extra = self.memory.render() if self.memory else ""
+        return f"{base}\n\n{extra}" if extra else base
 
     def ask(
         self,
@@ -46,7 +54,9 @@ class InspectionConversationService:
             question=question,
             scope=Scope.CODE,
             chunks=context.chunks,
-            system_instructions=system_instructions or CODE_INSPECTION_SYSTEM,
+            system_instructions=self._system_instructions(
+                system_instructions, CODE_INSPECTION_SYSTEM
+            ),
             model=model,
             history=history,
             previous_response_id=previous_response_id,

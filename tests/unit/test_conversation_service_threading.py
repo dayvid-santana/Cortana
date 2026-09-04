@@ -82,3 +82,55 @@ def test_ask_persists_the_new_response_id_with_the_assistant_message() -> None:
 
     assistant_message = next(m for m in store.messages if m[2] == "assistant")
     assert assistant_message[5] == "resp_2"
+
+
+class FakeMemory:
+    def __init__(self, content: str) -> None:
+        self.content = content
+
+    def render(self) -> str:
+        return self.content
+
+
+def test_ask_appends_project_memory_to_the_system_instructions() -> None:
+    store = FakeStore()
+    provider = FakeProvider(response_id="resp_1")
+    memory = FakeMemory('<project_memory source="AGENTS.md">use snake_case</project_memory>')
+    service = ConversationService(
+        store,
+        FakeContext(),
+        FakeProviders(provider),
+        memory,  # type: ignore[arg-type]
+    )
+
+    service.ask(1, "como devo nomear funções?", "openai")
+
+    assert "use snake_case" in provider.requests[0].system_instructions
+
+
+def test_ask_without_memory_service_leaves_system_instructions_untouched() -> None:
+    store = FakeStore()
+    provider = FakeProvider(response_id="resp_1")
+    service = ConversationService(store, FakeContext(), FakeProviders(provider))  # type: ignore[arg-type]
+
+    service.ask(1, "pergunta", "openai")
+
+    assert "project_memory" not in provider.requests[0].system_instructions
+
+
+def test_ask_with_an_empty_memory_render_leaves_system_instructions_untouched() -> None:
+    store = FakeStore()
+    provider = FakeProvider(response_id="resp_1")
+    memory = FakeMemory("")
+    service = ConversationService(
+        store,
+        FakeContext(),
+        FakeProviders(provider),
+        memory,  # type: ignore[arg-type]
+    )
+
+    service.ask(1, "pergunta", "openai")
+
+    from devmate.prompts.documentation_chat import DOCUMENTATION_CHAT_SYSTEM
+
+    assert provider.requests[0].system_instructions == DOCUMENTATION_CHAT_SYSTEM

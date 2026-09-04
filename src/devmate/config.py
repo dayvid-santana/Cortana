@@ -189,6 +189,19 @@ class DaemonConfig(BaseModel):
     preload_model: bool = True
 
 
+class MemoryConfig(BaseModel):
+    """Arquivos lidos uma vez e injetados em toda conversa, como contexto fixo.
+
+    Diferente da busca por trechos (que muda por pergunta), isto é sempre o
+    mesmo conteúdo — pensado para AGENTS.md e afins: convenções do projeto que
+    a Diana deveria "já saber", sem precisar que a pergunta as traga à tona.
+    """
+
+    enabled: bool = True
+    files: list[str] = Field(default_factory=lambda: ["AGENTS.md"])
+    max_chars: int = Field(default=4000, gt=0, le=20000)
+
+
 class EditConfig(BaseModel):
     """Como `devmate edit` gera e aplica alterações de código."""
 
@@ -216,6 +229,7 @@ class AppConfig(BaseModel):
     daemon: DaemonConfig = Field(default_factory=DaemonConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     edit: EditConfig = Field(default_factory=EditConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
 
 
 DEFAULT_CONFIG_TOML = (
@@ -294,7 +308,13 @@ DEFAULT_CONFIG_TOML = (
     'engine = "llm"\n'
     'dev_agent_url = "http://127.0.0.1:8765"\n'
     "dev_agent_poll_seconds = 2.0\n"
-    "dev_agent_timeout_seconds = 600.0\n"
+    "dev_agent_timeout_seconds = 600.0\n\n"
+    "[memory]\n"
+    "# Arquivos lidos uma vez e injetados em toda conversa, como contexto fixo\n"
+    "# (convenções do projeto que a Diana já deveria saber, sem depender da busca).\n"
+    "enabled = true\n"
+    'files = ["AGENTS.md"]\n'
+    "max_chars = 4000\n"
 )
 
 
