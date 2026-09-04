@@ -101,6 +101,26 @@ class DevAgentClient:
         )
         return job
 
+    def headers(
+        self, cwd: Path, confirmed_apply: bool = False, suggest_purposes: bool = False
+    ) -> dict[str, Any]:
+        """Atalho direto pro comando dedicado do dev-agent (`dev-agent headers`) — mais
+        rápido e confiável que delegar como um objetivo livre pro `task`/`run` genérico,
+        já que essa tarefa específica já tem seu próprio endpoint no dev-agent.
+
+        Sem `confirmed_apply`, só lista os arquivos elegíveis (nada é escrito).
+        """
+        result: dict[str, Any] = self._request(
+            "POST",
+            "/headers",
+            json={
+                "cwd": str(cwd),
+                "confirmed_apply": confirmed_apply,
+                "suggest_purposes": suggest_purposes,
+            },
+        )
+        return result
+
     def job(self, job_id: str) -> dict[str, Any]:
         result: dict[str, Any] = self._request("GET", f"/assistant/jobs/{job_id}")
         return result

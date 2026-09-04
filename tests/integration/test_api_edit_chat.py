@@ -18,7 +18,12 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
-from devmate.api.app import _looks_like_edit_intent, _split_diff_by_file, app
+from devmate.api.app import (
+    _looks_like_edit_intent,
+    _looks_like_header_intent,
+    _split_diff_by_file,
+    app,
+)
 from devmate.api.project_registry import ProjectRegistry
 
 
@@ -191,6 +196,59 @@ def test_docs_scope_suggests_edit_instead_of_answering_when_message_requests_a_c
         assert isinstance(message, dict)
         assert message["suggestedScope"] == "edit"
         assert "Edit" in message["content"]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "adicione cabeçalho nos arquivos que faltam",
+        "aplique o header padrão em todo o projeto",
+        "esse arquivo não tem CABEÇALHO",
+    ],
+)
+def test_looks_like_header_intent_matches_header_requests(message: str) -> None:
+    assert _looks_like_header_intent(message) is True
+
+
+def test_looks_like_header_intent_does_not_match_unrelated_edits() -> None:
+    assert _looks_like_header_intent("corrija o typo no README") is False
+
+
+def test_edit_chat_with_header_intent_falls_back_to_llm_when_dev_agent_is_unreachable(
+    git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regressão: o atalho de cabeçalhos só deve interceptar quando o dev-agent
+    realmente responde — sem ele, o pedido segue pelo fluxo normal (dev-agent
+    genérico, depois LLM), sem travar nem devolver uma resposta vazia."""
+    monkeypatch.delenv("DEVMATE_PROVIDER", raising=False)
+    monkeypatch.delenv("DEVMATE_MODEL", raising=False)
+    monkeypatch.setattr("devmate.api.app.projects", ProjectRegistry(tmp_path / "projects.json"))
+    _add_a_source_file(git_repo)
+
+    with _live_server() as base_url, httpx.Client(base_url=base_url) as client:
+        project = client.post("/api/v1/projects", json={"path": str(git_repo)}).json()
+        _force_dev_agent_unreachable(git_repo)
+
+        created = client.post(
+            f"/api/v1/projects/{project['id']}/chat/runs",
+            json={
+                "message": "adicione cabeçalho nos arquivos que faltam",
+                "scope": "edit",
+                "commitHash": project["activeCommitHash"],
+                "provider": "mock",
+            },
+        )
+        assert created.status_code == 202, created.text
+        run = created.json()
+
+        with client.stream("GET", f"/api/v1/runs/{run['id']}/events") as response:
+            payload = _read_until_run_completed(response)
+        completed = _extract_event_data(payload, "run.completed")
+        message = completed["message"]
+        assert isinstance(message, dict)
+        proposal = message["editProposal"]
+        assert isinstance(proposal, dict)
+        assert proposal["engine"] == "llm"
 
 
 def test_split_diff_by_file_breaks_a_multi_file_unified_diff() -> None:

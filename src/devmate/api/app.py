@@ -1093,19 +1093,66 @@ def _propose_edit_via_llm(
     return proposal.narrative, edit_payload
 
 
-def _run_edit_chat(
-    state: dict[str, Any], runtime: Runtime, message: str, provider: str, commit: str
-) -> None:
-    """Propõe uma edição de código pelo chat; nunca escreve — só ``apply_edit_proposal``
-    (depois de confirmação explícita) grava algo em disco.
+_HEADER_INTENT_PATTERN = re.compile(r"cabe[çc]alh|\bheaders?\b", re.IGNORECASE)
 
-    O dev-agent (plano revisável + worktree isolado) é o caminho preferido; a Diana só
-    edita direto por conta própria quando ele não está disponível ou não dá conta.
+
+def _looks_like_header_intent(message: str) -> bool:
+    return bool(_HEADER_INTENT_PATTERN.search(message))
+
+
+def _try_headers_via_dev_agent(runtime: Runtime) -> tuple[bool, str, dict[str, object] | None]:
+    """Atalho direto pro comando dedicado do dev-agent (`dev-agent headers`) em vez de
+    delegar como um objetivo livre pro `task`/`run` genérico — mais rápido e confiável,
+    já que essa tarefa específica já tem seu próprio endpoint lá.
+
+    Retorna ``(handled, narrative, edit_payload)``. ``handled=False`` significa "não
+    consegui tentar isto" (dev-agent indisponível) — quem chamou deve seguir para o
+    fluxo genérico. ``handled=True`` com ``edit_payload=None`` é uma resposta final por
+    si só (ex.: nada para fazer), sem propor nada.
     """
+    service = runtime.dev_agent_edit_service()
+    available, _reason = service.client.available()
+    if not available:
+        return False, "", None
+    try:
+        result = service.client.headers(service.project_root, confirmed_apply=False)
+    except DevAgentUnavailableError:
+        return False, "", None
+    candidates = cast(list[str], result.get("candidates") or [])
+    if not candidates:
+        return True, "Todos os arquivos elegíveis já têm o cabeçalho padrão.", None
+    proposal_id = uuid4().hex
+    with _edit_proposals_lock:
+        _edit_proposals[proposal_id] = {
+            "projectId": runtime.project_id,
+            "engine": "dev_agent_headers",
+            "applied": False,
+        }
+    files = [
+        {"path": path, "diff": "Cabeçalho padrão será inserido no início deste arquivo."}
+        for path in candidates
+    ]
+    narrative = (
+        f"Encontrei {len(candidates)} arquivo(s) sem o cabeçalho padrão do projeto: "
+        f"{', '.join(candidates)}."
+    )
+    edit_payload: dict[str, object] = {
+        "id": proposal_id,
+        "applied": False,
+        "engine": "dev_agent_headers",
+        "files": files,
+    }
+    return True, narrative, edit_payload
+
+
+def _finish_edit_chat(
+    state: dict[str, Any],
+    runtime: Runtime,
+    narrative: str,
+    edit_payload: dict[str, object] | None,
+    provider: str,
+) -> None:
     run_id = cast(str, state["id"])
-    narrative, edit_payload = _propose_edit_via_dev_agent(runtime, message)
-    if edit_payload is None:
-        narrative, edit_payload = _propose_edit_via_llm(runtime, message, provider, commit)
     if cast(Event, state["cancelled"]).is_set():
         return
     _emit(state, {"type": "tool.completed", "runId": run_id, "tool": "repository_context"})
@@ -1137,6 +1184,28 @@ def _run_edit_chat(
             },
         },
     )
+
+
+def _run_edit_chat(
+    state: dict[str, Any], runtime: Runtime, message: str, provider: str, commit: str
+) -> None:
+    """Propõe uma edição de código pelo chat; nunca escreve — só ``apply_edit_proposal``
+    (depois de confirmação explícita) grava algo em disco.
+
+    Ordem de preferência: (1) atalho dedicado do dev-agent quando a mensagem casa com
+    uma tarefa que já tem endpoint próprio (ex.: cabeçalhos); (2) plano revisável do
+    dev-agent (worktree isolado) para o objetivo livre; (3) edição direta via LLM, só
+    quando nenhum dos dois acima está disponível ou dá conta.
+    """
+    if _looks_like_header_intent(message):
+        handled, narrative, edit_payload = _try_headers_via_dev_agent(runtime)
+        if handled:
+            _finish_edit_chat(state, runtime, narrative, edit_payload, provider)
+            return
+    narrative, edit_payload = _propose_edit_via_dev_agent(runtime, message)
+    if edit_payload is None:
+        narrative, edit_payload = _propose_edit_via_llm(runtime, message, provider, commit)
+    _finish_edit_chat(state, runtime, narrative, edit_payload, provider)
 
 
 _EDIT_INTENT_PATTERN = re.compile(
@@ -1336,6 +1405,16 @@ def apply_edit_proposal(project_id: str, proposal_id: str) -> dict[str, object]:
         service.apply(cast(str, stored["diff"]))
         service.cleanup(cast(str, stored["jobId"]))
         return {"id": proposal_id, "applied": True, "engine": "dev_agent"}
+    if engine == "dev_agent_headers":
+        service = runtime.dev_agent_edit_service()
+        result = service.client.headers(service.project_root, confirmed_apply=True)
+        applied_files = cast(list[str], result.get("applied") or [])
+        return {
+            "id": proposal_id,
+            "applied": True,
+            "engine": "dev_agent_headers",
+            "files": applied_files,
+        }
     changes = cast(list[ProposedFileChange], stored["changes"])
     for change in changes:
         runtime.filesystem.write_text(change.path, change.proposed)

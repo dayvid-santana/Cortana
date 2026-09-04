@@ -126,3 +126,30 @@ def test_cleanup_swallows_failures() -> None:
     client, _ = make_client(error=httpx.ConnectError("fora do ar"))
 
     client.cleanup("job-1")  # não deve levantar
+
+
+def test_headers_defaults_to_a_dry_listing() -> None:
+    client, fake = make_client(responses=[FakeResponse(payload={"candidates": ["a.py"]})])
+
+    result = client.headers(Path("/tmp/project"))
+
+    assert result["candidates"] == ["a.py"]
+    method, path, body = fake.calls[0]
+    assert method == "POST"
+    assert path == "/headers"
+    assert body == {
+        "cwd": str(Path("/tmp/project")),
+        "confirmed_apply": False,
+        "suggest_purposes": False,
+    }
+
+
+def test_headers_confirmed_apply_writes_and_reports_the_applied_files() -> None:
+    client, fake = make_client(responses=[FakeResponse(payload={"applied": ["a.py", "b.py"]})])
+
+    result = client.headers(Path("/tmp/project"), confirmed_apply=True)
+
+    assert result["applied"] == ["a.py", "b.py"]
+    _, _, body = fake.calls[0]
+    assert body is not None
+    assert body["confirmed_apply"] is True
