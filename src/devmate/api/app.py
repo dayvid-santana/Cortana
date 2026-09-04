@@ -1139,6 +1139,71 @@ def _run_edit_chat(
     )
 
 
+_EDIT_INTENT_PATTERN = re.compile(
+    r"\b("
+    r"adicione|adiciona|adicionar|corrija|corrige|corrigir|crie|cria|criar|"
+    r"remova|remove|remover|renomeie|renomeia|renomear|refatore|refatora|refatorar|"
+    r"insira|insere|inserir|altere|altera|alterar|edite|edita|editar|"
+    r"implemente|implementa|implementar|escreva|escreve|escrever|"
+    r"delete|deleta|deletar|exclua|exclui|excluir|atualize|atualiza|atualizar|"
+    r"troque|troca|trocar|conserte|conserta|consertar|aplique|aplica|aplicar"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_edit_intent(message: str) -> bool:
+    """Heurística barata (sem chamar provider) pra sugerir o escopo Edit quando a
+    mensagem soa como um pedido de alteração, em vez da Diana só recusar em Docs/Code
+    — que são somente leitura por design, não porque ela "não sabe usar os agents".
+
+    Exclui mensagens com "?": "como faço para criar X?" é uma pergunta genuína sobre
+    documentação, não um pedido de ação, mesmo contendo um verbo da lista.
+    """
+    return "?" not in message and bool(_EDIT_INTENT_PATTERN.search(message))
+
+
+def _suggest_edit_scope(
+    state: dict[str, Any], runtime: Runtime, message: str, scope: str, provider: str
+) -> None:
+    run_id = cast(str, state["id"])
+    narrative = (
+        "Isso parece um pedido de alteração, não uma pergunta — e o escopo "
+        f"'{scope}' é somente leitura, por segurança: nunca escrevo nada sem você "
+        'trocar explicitamente para o escopo "Edit". Troque para lá e repita o pedido '
+        "se for isso mesmo que você quer."
+    )
+    _emit(state, {"type": "tool.completed", "runId": run_id, "tool": "repository_context"})
+    _emit(state, {"type": "assistant.delta", "runId": run_id, "delta": narrative})
+    message_id = uuid4().hex
+    thread_id = cast(str, state["threadId"])
+    created_at = datetime.now(UTC).isoformat()
+    runtime.store.add_web_message(
+        message_id, thread_id, "assistant", narrative, scope, "complete", provider, None
+    )
+    state["status"] = "completed"
+    _emit(
+        state,
+        {
+            "type": "run.completed",
+            "runId": run_id,
+            "message": {
+                "id": message_id,
+                "threadId": thread_id,
+                "role": "assistant",
+                "content": narrative,
+                "createdAt": created_at,
+                "scope": scope,
+                "provider": provider,
+                "model": None,
+                "sources": [],
+                "status": "complete",
+                "suggestedScope": "edit",
+            },
+        },
+    )
+
+
 def _execute_chat_run(
     state: dict[str, Any], runtime: Runtime, message: str, scope: str, provider: str, commit: str
 ) -> None:
@@ -1153,6 +1218,9 @@ def _execute_chat_run(
             return
         if scope == "edit":
             _run_edit_chat(state, runtime, message, provider, commit)
+            return
+        if scope in {"docs", "code"} and _looks_like_edit_intent(message):
+            _suggest_edit_scope(state, runtime, message, scope, provider)
             return
         if scope == "docs":
             result = runtime.conversation_service().ask_stream(

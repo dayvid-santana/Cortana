@@ -18,7 +18,7 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
-from devmate.api.app import _split_diff_by_file, app
+from devmate.api.app import _looks_like_edit_intent, _split_diff_by_file, app
 from devmate.api.project_registry import ProjectRegistry
 
 
@@ -123,6 +123,74 @@ def _extract_event_data(payload: str, event_type: str) -> dict[str, object]:
             assert isinstance(parsed, dict)
             return parsed
     raise AssertionError(f"event {event_type} not found in payload")
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "adicione um cabeçalho nos arquivos que faltam",
+        "corrija o typo no README",
+        "crie um novo componente de botão",
+        "remova essa função morta",
+        "renomeia a variável x para total",
+        "atualize a dependência do fastapi",
+        "aplique o padrão de cabeçalho do projeto",
+    ],
+)
+def test_looks_like_edit_intent_matches_action_verbs(message: str) -> None:
+    assert _looks_like_edit_intent(message) is True
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "o que mudou nesse commit?",
+        "por que essa função existe?",
+        "qual a decisão de arquitetura aqui?",
+        "explique como funciona o cache",
+    ],
+)
+def test_looks_like_edit_intent_does_not_match_questions(message: str) -> None:
+    assert _looks_like_edit_intent(message) is False
+
+
+def test_looks_like_edit_intent_ignores_action_verbs_inside_a_genuine_question() -> None:
+    """ "como faço para criar X?" é uma pergunta sobre documentação, não um pedido de
+    ação — mesmo contendo um verbo da lista de intenção de edição."""
+    assert _looks_like_edit_intent("como faço para criar um novo componente?") is False
+
+
+def test_docs_scope_suggests_edit_instead_of_answering_when_message_requests_a_change(
+    git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regressão: em Docs/Code (somente leitura por design), um pedido de alteração
+    não deveria só ser recusado — a Diana sugere trocar para o escopo Edit."""
+    monkeypatch.delenv("DEVMATE_PROVIDER", raising=False)
+    monkeypatch.delenv("DEVMATE_MODEL", raising=False)
+    monkeypatch.setattr("devmate.api.app.projects", ProjectRegistry(tmp_path / "projects.json"))
+
+    with _live_server() as base_url, httpx.Client(base_url=base_url) as client:
+        project = client.post("/api/v1/projects", json={"path": str(git_repo)}).json()
+
+        created = client.post(
+            f"/api/v1/projects/{project['id']}/chat/runs",
+            json={
+                "message": "adicione um cabeçalho nos arquivos que faltam",
+                "scope": "docs",
+                "commitHash": project["activeCommitHash"],
+                "provider": "mock",
+            },
+        )
+        assert created.status_code == 202, created.text
+        run = created.json()
+
+        with client.stream("GET", f"/api/v1/runs/{run['id']}/events") as response:
+            payload = _read_until_run_completed(response)
+        completed = _extract_event_data(payload, "run.completed")
+        message = completed["message"]
+        assert isinstance(message, dict)
+        assert message["suggestedScope"] == "edit"
+        assert "Edit" in message["content"]
 
 
 def test_split_diff_by_file_breaks_a_multi_file_unified_diff() -> None:
