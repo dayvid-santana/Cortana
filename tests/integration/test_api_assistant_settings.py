@@ -61,7 +61,7 @@ def test_diagnostics_reports_the_mock_provider_as_available(client: TestClient) 
     assert names["mock"]["availability"] == "available"
     assert names["mock"]["authConfigured"] is True
     speech_names = {item["name"] for item in body["speechProviders"]}
-    assert speech_names == {"system", "openai"}
+    assert speech_names == {"system", "openai", "elevenlabs", "edge"}
 
 
 def test_providers_list_and_detail_reflect_real_availability(client: TestClient) -> None:
@@ -125,13 +125,25 @@ def test_speech_providers_and_voices_list_come_from_the_real_registry(client: Te
     providers = client.get("/api/v1/speech/providers")
     assert providers.status_code == 200
     names = {item["name"] for item in providers.json()["items"]}
-    assert names == {"system", "openai"}
+    assert names == {"system", "openai", "elevenlabs", "edge"}
 
     voices = client.get("/api/v1/speech/voices", params={"provider": "openai"})
     assert voices.status_code == 200
     items = voices.json()["items"]
     assert items, "o catálogo embutido da OpenAI não depende de rede nem de credencial"
     assert all(item["provider"] == "openai" for item in items)
+
+
+def test_preview_rejects_a_local_only_voice_with_a_clear_error(client: TestClient) -> None:
+    """Regressão: escolher uma voz `system` no preview do frontend não deve falhar em
+    silêncio — o backend fala no dispositivo local, não gera áudio pro navegador."""
+    voices = client.get("/api/v1/speech/voices", params={"provider": "system"})
+    voice_id = voices.json()["items"][0]["id"]
+
+    response = client.post("/api/v1/speech/voices/preview", json={"voiceId": voice_id})
+
+    assert response.status_code == 400
+    assert "fala direto no dispositivo local" in response.json()["detail"]
 
 
 def test_speech_settings_update_persists_provider_and_voice(

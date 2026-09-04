@@ -58,7 +58,7 @@ from devmate.errors import DevMateError, UnsafePathError
 from devmate.prompts.api_chat import API_CHAT_SYSTEM
 
 _KNOWN_LLM_PROVIDERS = ("mock", "codex", "openai", "openai_compatible")
-_KNOWN_SPEECH_PROVIDERS = ("system", "openai")
+_KNOWN_SPEECH_PROVIDERS = ("system", "openai", "elevenlabs", "edge")
 
 # Metadados estáticos por provider de LLM (taxonomia), combinados com o estado real
 # (disponibilidade, modelo, tarefas roteadas) calculado por request em
@@ -512,6 +512,8 @@ def _speech_provider_payload(name: str, runtime: Runtime) -> dict[str, object]:
     }
     if name == "openai":
         payload["model"] = runtime.config.speech.providers.openai.model
+    if name == "elevenlabs":
+        payload["model"] = runtime.config.speech.providers.elevenlabs.model
     return payload
 
 
