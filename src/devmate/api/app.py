@@ -1057,29 +1057,39 @@ def _split_diff_by_file(diff_text: str) -> list[dict[str, str]]:
 
 def _propose_edit_via_dev_agent(
     runtime: Runtime, message: str
-) -> tuple[str, dict[str, object] | None]:
+) -> tuple[bool, str, dict[str, object] | None]:
     """Tenta o caminho preferido: plano revisável do dev-agent, executado num worktree
-    isolado. ``None`` no segundo valor sinaliza "não consegui" — indisponível, precisa de
-    aprovação de arquitetura que o chat não sabe dar, ou o job não terminou com sucesso —
-    e quem chamou deve cair para a proposta direta via LLM."""
+    isolado.
+
+    Retorna ``(handled, narrative, edit_payload)``. ``handled=False`` significa "não
+    consegui nem tentar de verdade" — dev-agent indisponível, ou plano exige aprovação
+    de arquitetura que o chat não sabe dar — e quem chamou deve cair para o LLM direto.
+    ``handled=True`` com ``edit_payload=None`` é uma resposta final por si só: o
+    dev-agent tentou e não deu certo por um motivo real e específico (ex.: "há mudanças
+    locais não commitadas") — cair pro LLM esconderia esse motivo atrás de uma
+    mensagem sem relação nenhuma com o que realmente aconteceu.
+    """
     service = runtime.dev_agent_edit_service()
     available, _reason = service.client.available()
     if not available:
-        return "", None
+        return False, "", None
     try:
         plan = service.propose(message)
     except DevAgentUnavailableError:
-        return "", None
+        return False, "", None
     if plan.architecture_decision_required:
-        return "", None
+        return False, "", None
     config = runtime.config.edit
     poll, timeout = config.dev_agent_poll_seconds, config.dev_agent_timeout_seconds
     try:
         result = service.run(plan.id, poll, timeout)
     except DevAgentUnavailableError:
-        return "", None
-    if not result.succeeded or not result.has_changes:
-        return "", None
+        return False, "", None
+    if not result.succeeded:
+        detail = result.error or "motivo desconhecido."
+        return True, f"O dev-agent não conseguiu concluir isso: {detail}", None
+    if not result.has_changes:
+        return True, "O dev-agent não encontrou nenhuma alteração necessária para isso.", None
     proposal_id = uuid4().hex
     with _edit_proposals_lock:
         _edit_proposals[proposal_id] = {
@@ -1095,7 +1105,7 @@ def _propose_edit_via_dev_agent(
         "engine": "dev_agent",
         "files": _split_diff_by_file(result.diff),
     }
-    return plan.objective, edit_payload
+    return True, plan.objective, edit_payload
 
 
 def _propose_edit_via_llm(
@@ -1241,8 +1251,8 @@ def _run_edit_chat(
         if handled:
             _finish_edit_chat(state, runtime, narrative, edit_payload, provider)
             return
-    narrative, edit_payload = _propose_edit_via_dev_agent(runtime, message)
-    if edit_payload is None:
+    handled, narrative, edit_payload = _propose_edit_via_dev_agent(runtime, message)
+    if not handled:
         narrative, edit_payload = _propose_edit_via_llm(runtime, message, provider, commit)
     _finish_edit_chat(state, runtime, narrative, edit_payload, provider)
 

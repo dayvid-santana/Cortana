@@ -62,6 +62,67 @@ def _force_dev_agent_unreachable(git_repo: Path) -> None:
     config_path.write_text(updated, encoding="utf-8")
 
 
+@contextmanager
+def _fake_dev_agent_server(job_response: dict[str, object]) -> Iterator[str]:
+    """Um dev-agent falso o bastante: aceita o plano e o start, mas o job já nasce
+    num status terminal — pra exercitar como devmate.api.app reage a uma falha real
+    do dev-agent (não a uma indisponibilidade), sem depender do dev-agent de verdade."""
+    from fastapi import FastAPI
+
+    fake = FastAPI()
+
+    @fake.post("/assistant/task-plans")
+    def _create_plan(body: dict[str, object]) -> dict[str, object]:
+        return {
+            "id": "plan-1",
+            "objective": body.get("objective", ""),
+            "architecture_decision_required": False,
+        }
+
+    @fake.post("/assistant/task-plans/{plan_id}/start")
+    def _start(plan_id: str) -> dict[str, object]:
+        return {"id": "job-1"}
+
+    @fake.get("/assistant/jobs/{job_id}")
+    def _job(job_id: str) -> dict[str, object]:
+        return job_response
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    config = uvicorn.Config(fake, host="127.0.0.1", port=port, log_level="critical")
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    try:
+        base_url = f"http://127.0.0.1:{port}"
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            try:
+                if (
+                    httpx.post(f"{base_url}/assistant/task-plans", json={}, timeout=0.2).status_code
+                    < 500
+                ):
+                    break
+            except httpx.HTTPError:
+                pass
+            time.sleep(0.05)
+        yield base_url
+    finally:
+        server.should_exit = True
+        thread.join(timeout=5)
+
+
+def _point_dev_agent_at(git_repo: Path, base_url: str) -> None:
+    config_path = git_repo / ".devmate" / "config.toml"
+    text = config_path.read_text(encoding="utf-8")
+    updated = text.replace(
+        'dev_agent_url = "http://127.0.0.1:8765"', f'dev_agent_url = "{base_url}"'
+    )
+    assert updated != text, "dev_agent_url padrão não encontrada no config.toml"
+    config_path.write_text(updated, encoding="utf-8")
+
+
 @pytest.fixture()
 def web_client(git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.delenv("DEVMATE_PROVIDER", raising=False)
@@ -328,6 +389,51 @@ def test_edit_chat_run_proposes_a_change_and_applies_it_after_confirmation(
             f"/api/v1/projects/{project['id']}/edit-proposals/{proposal['id']}/apply"
         )
         assert second_apply.status_code == 400
+
+
+def test_edit_chat_surfaces_the_dev_agent_failure_reason_instead_of_falling_back_to_llm(
+    git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regressão: quando o dev-agent responde (não está indisponível) mas o job
+    termina em falha por um motivo real e específico (ex.: mudanças locais não
+    commitadas), a Diana deve mostrar esse motivo — não cair pro LLM em silêncio, o
+    que escondia a causa real atrás de uma mensagem sem relação (ex.: "o provider
+    codex é somente leitura"), fazendo parecer que ela nunca tentou usar o agent."""
+    monkeypatch.delenv("DEVMATE_PROVIDER", raising=False)
+    monkeypatch.delenv("DEVMATE_MODEL", raising=False)
+    monkeypatch.setattr("devmate.api.app.projects", ProjectRegistry(tmp_path / "projects.json"))
+
+    with _live_server() as base_url, httpx.Client(base_url=base_url) as client:
+        project = client.post("/api/v1/projects", json={"path": str(git_repo)}).json()
+        failure = {
+            "status": "failed",
+            "diff": "",
+            "error": "O projeto possui alterações locais. Faça commit ou stash antes "
+            "de iniciar uma tarefa isolada.",
+        }
+        with _fake_dev_agent_server(failure) as dev_agent_url:
+            _point_dev_agent_at(git_repo, dev_agent_url)
+
+            created = client.post(
+                f"/api/v1/projects/{project['id']}/chat/runs",
+                json={
+                    "message": "adicione um comentário de teste",
+                    "scope": "edit",
+                    "commitHash": project["activeCommitHash"],
+                    "provider": "codex",
+                },
+            )
+            assert created.status_code == 202, created.text
+            run = created.json()
+
+            with client.stream("GET", f"/api/v1/runs/{run['id']}/events") as response:
+                payload = _read_until_run_completed(response)
+        completed = _extract_event_data(payload, "run.completed")
+        message = completed["message"]
+        assert isinstance(message, dict)
+        assert message["editProposal"] is None
+        assert "commit ou stash" in message["content"]
+        assert "codex" not in message["content"]
 
 
 def test_apply_unknown_proposal_returns_a_clear_error(
