@@ -28,6 +28,7 @@ from devmate.application.project_memory_service import ProjectMemoryService
 from devmate.application.reading_service import ReadingService
 from devmate.application.scan_service import ScanService
 from devmate.application.voice_service import VoiceCommand, VoiceConversationService
+from devmate.application.working_tree_cache import WorkingTreeCache
 from devmate.config import AppConfig, config_path, database_path, load_config
 from devmate.domain.ports import SpeechInputProvider, SpeechProvider
 from devmate.errors import CommitNotFoundError, ConfigurationError
@@ -75,8 +76,12 @@ class Runtime:
     def context_service(self) -> ContextService:
         return ContextService(self.git, self.store)
 
-    def inspection_service(self) -> InspectionService:
-        return InspectionService(self.filesystem, self.context_service(), self.store)
+    def inspection_service(self, working_tree: WorkingTreeCache | None = None) -> InspectionService:
+        """`working_tree`, quando informado, faz o escopo de código ler do disco em
+        tempo real (ver ``live=True`` em ``InspectionService.build``) em vez do commit
+        indexado — só o backend de longa duração (`devmate serve`) tem um observador
+        de filesystem de pé para fornecer isso; o CLI de um único comando não."""
+        return InspectionService(self.filesystem, self.context_service(), self.store, working_tree)
 
     def edit_service(self) -> EditProposalService:
         return EditProposalService(self.inspection_service(), self.filesystem, self.providers)
@@ -124,9 +129,14 @@ class Runtime:
             self.store, self.context_service(), self.providers, self.project_memory_service()
         )
 
-    def inspection_conversation_service(self) -> InspectionConversationService:
+    def inspection_conversation_service(
+        self, working_tree: WorkingTreeCache | None = None
+    ) -> InspectionConversationService:
         return InspectionConversationService(
-            self.inspection_service(), self.store, self.providers, self.project_memory_service()
+            self.inspection_service(working_tree),
+            self.store,
+            self.providers,
+            self.project_memory_service(),
         )
 
     def voice_service(

@@ -42,8 +42,9 @@ class InspectionConversationService:
         files: list[str] | None = None,
         full_repo: bool = False,
         system_instructions: str | None = None,
+        live: bool = False,
     ) -> Answer:
-        context = self.inspection.build(project_id, commit_ref, files or [], full_repo)
+        context = self.inspection.build(project_id, commit_ref, files or [], full_repo, live)
         # Lido antes de gravar a pergunta atual, para não duplicá-la no histórico.
         history = load_history(self.store, project_id, context.commit_hash)
         previous_response_id = self.store.last_response_id(

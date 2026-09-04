@@ -22,6 +22,7 @@ from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from devmate.adapters.filesystem.working_tree_watcher import WorkingTreeWatcher
 from devmate.adapters.speech.registry import get_speech_provider
 from devmate.api.dependencies import get_runtime
 from devmate.api.errors import status_for
@@ -754,6 +755,44 @@ def update_speech_settings(project_id: str, body: SpeechSettingsUpdate) -> dict[
 _reading_sessions: dict[str, dict[str, Any]] = {}
 _reading_sessions_lock = Lock()
 
+# Um observador de filesystem por projeto, iniciado sob demanda na primeira pergunta
+# em escopo "code" e mantido pelo resto da vida do processo (`devmate serve`) — é
+# assim que o backend "está sempre observando os arquivos": não é um watcher por
+# request, é um por diretório de projeto, reaproveitado. Nunca chama um provider;
+# só mantém `WorkingTreeCache` fresca por evento de filesystem, sem custo de tokens.
+_working_tree_watchers: dict[str, WorkingTreeWatcher] = {}
+_working_tree_watchers_lock = Lock()
+
+
+def _working_tree_watcher(runtime: Runtime) -> WorkingTreeWatcher:
+    key = str(runtime.filesystem.root)
+    with _working_tree_watchers_lock:
+        watcher = _working_tree_watchers.get(key)
+        if watcher is None:
+            watcher = WorkingTreeWatcher(runtime.filesystem)
+            watcher.start()
+            _working_tree_watchers[key] = watcher
+        return watcher
+
+
+def _is_current_commit(runtime: Runtime, commit_hash: str) -> bool:
+    """Só ativa leitura ao vivo quando a pergunta é sobre o estado atual do projeto
+    (HEAD) — pedir um commit específico do histórico continua lendo daquele commit,
+    exatamente como antes."""
+    try:
+        return commit_hash == runtime.git.head()
+    except DevMateError:
+        return False
+
+
+@app.on_event("shutdown")
+def _stop_working_tree_watchers() -> None:
+    with _working_tree_watchers_lock:
+        for watcher in _working_tree_watchers.values():
+            watcher.stop()
+        _working_tree_watchers.clear()
+
+
 # Propostas de edição pendentes de confirmação, por id. Efêmero — como `_runs` e
 # `_reading_sessions` — vive só enquanto o processo do servidor está de pé; recarregar
 # a página perde a chance de aplicar uma proposta ainda não confirmada.
@@ -1306,8 +1345,20 @@ def _execute_chat_run(
                 API_CHAT_SYSTEM,
             )
         else:
-            result = runtime.inspection_conversation_service().ask(
-                runtime.project_id, message, provider, commit, None, None, True, API_CHAT_SYSTEM
+            live = _is_current_commit(runtime, commit)
+            watcher = _working_tree_watcher(runtime) if live else None
+            result = runtime.inspection_conversation_service(
+                watcher.cache if watcher else None
+            ).ask(
+                runtime.project_id,
+                message,
+                provider,
+                commit,
+                None,
+                None,
+                True,
+                API_CHAT_SYSTEM,
+                live,
             )
         _emit(state, {"type": "tool.completed", "runId": run_id, "tool": "repository_context"})
         if cancelled.is_set():
@@ -1524,7 +1575,12 @@ def chat(body: ChatRequest, runtime: Runtime = Depends(get_runtime)) -> ChatResp
     runtime.ensure_indexed(body.commit)
 
     if body.scope == "code":
-        inspection_conversation = runtime.inspection_conversation_service()
+        target_commit = runtime.git.resolve_commit(body.commit or "HEAD")
+        live = _is_current_commit(runtime, target_commit)
+        watcher = _working_tree_watcher(runtime) if live else None
+        inspection_conversation = runtime.inspection_conversation_service(
+            watcher.cache if watcher else None
+        )
         answer = inspection_conversation.ask(
             runtime.project_id,
             body.question,
@@ -1534,6 +1590,7 @@ def chat(body: ChatRequest, runtime: Runtime = Depends(get_runtime)) -> ChatResp
             body.files,
             body.full_repo,
             instructions,
+            live,
         )
     else:
         if body.files or body.full_repo:

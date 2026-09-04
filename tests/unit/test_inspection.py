@@ -6,6 +6,7 @@ from pathlib import Path
 from devmate.adapters.filesystem.local_filesystem import LocalFilesystem
 from devmate.application.inspection_service import InspectionService
 from devmate.application.project_service import initialize_project
+from devmate.application.working_tree_cache import WorkingTreeCache
 from devmate.bootstrap import load_runtime
 
 
@@ -32,6 +33,44 @@ def test_inspection_reads_only_explicit_code_at_selected_commit(git_repo: Path) 
         chunk.text for chunk in context.chunks if chunk.reference.path == "src/app.py"
     )
     assert context.code_files == (("src/app.py", "AUTH = 'jwt'\n"),)
+
+
+def test_live_mode_reads_uncommitted_changes_from_disk_instead_of_the_commit(
+    git_repo: Path,
+) -> None:
+    """A diferença central do modo `live`: sem ele, um `git commit` seria necessário
+    antes da pergunta enxergar a mudança — com ele, o que está salvo no disco agora
+    (mesmo sem commit) é o que entra no contexto."""
+    source = git_repo / "src"
+    source.mkdir()
+    (source / "app.py").write_text("AUTH = 'jwt'\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "src/app.py"], cwd=git_repo, check=True, capture_output=True, text=True
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "feat: adiciona implementação"],
+        cwd=git_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    initialize_project(git_repo)
+    runtime = load_runtime(git_repo)
+    runtime.scan_service().scan(runtime.project_id)
+
+    # Edita o arquivo no disco, sem commitar — o cenário real de "estou programando".
+    (source / "app.py").write_text("AUTH = 'oauth2'\n", encoding="utf-8")
+
+    working_tree = WorkingTreeCache(git_repo)
+    live_context = runtime.inspection_service(working_tree).build(
+        runtime.project_id, None, ["src/app.py"], live=True
+    )
+    committed_context = runtime.inspection_service().build(
+        runtime.project_id, None, ["src/app.py"], live=False
+    )
+
+    assert live_context.code_files == (("src/app.py", "AUTH = 'oauth2'\n"),)
+    assert committed_context.code_files == (("src/app.py", "AUTH = 'jwt'\n"),)
 
 
 def _filesystem(root: Path) -> LocalFilesystem:

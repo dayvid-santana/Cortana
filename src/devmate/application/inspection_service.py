@@ -9,19 +9,10 @@ from pathlib import Path
 from devmate.adapters.filesystem.local_filesystem import LocalFilesystem
 from devmate.adapters.persistence.repositories import RepositoryStore
 from devmate.application.context_service import ContextService
-from devmate.constants import SOURCE_FILE_EXTENSIONS
+from devmate.application.working_tree_cache import WorkingTreeCache
+from devmate.constants import SOURCE_FILE_EXTENSIONS, is_excluded_directory
 from devmate.domain.models import ContextChunk
 from devmate.errors import UnsafePathError
-
-# Diretórios de dependências, cache e build nunca são código do projeto; incluí-los
-# facilmente estoura o limite de 200 arquivos (um .venv sozinho já tem milhares de .py).
-_EXCLUDED_DIRECTORY_NAMES = frozenset(
-    {"venv", "node_modules", "dist", "build", "__pycache__", "site-packages"}
-)
-
-
-def _is_excluded_directory(name: str) -> bool:
-    return name.startswith(".") or name in _EXCLUDED_DIRECTORY_NAMES or name.endswith(".egg-info")
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,14 +27,27 @@ class InspectionContext:
 
 class InspectionService:
     def __init__(
-        self, filesystem: LocalFilesystem, context: ContextService, store: RepositoryStore
+        self,
+        filesystem: LocalFilesystem,
+        context: ContextService,
+        store: RepositoryStore,
+        working_tree: WorkingTreeCache | None = None,
     ) -> None:
         self.filesystem = filesystem
         self.context = context
         self.store = store
+        # Presente só quando o backend está observando o filesystem (`devmate serve`).
+        # Ausente no CLI de um único comando, que sempre lê do commit — não há como
+        # "observar em tempo real" um processo que já vai terminar.
+        self.working_tree = working_tree
 
     def build(
-        self, project_id: int, commit_ref: str | None, files: list[str], full_repo: bool = False
+        self,
+        project_id: int,
+        commit_ref: str | None,
+        files: list[str],
+        full_repo: bool = False,
+        live: bool = False,
     ) -> InspectionContext:
         commit, docs = self.context.documentation_chunks(project_id, commit_ref)
         selected = files or ([] if not full_repo else self._source_files())
@@ -53,13 +57,18 @@ class InspectionService:
             )
         if len(selected) > 200:
             raise UnsafePathError("A seleção de código excede o limite de 200 arquivos do MVP.")
+        working_tree = self.working_tree if live else None
         code: list[tuple[str, str]] = []
         for requested in selected:
             path = self.filesystem.resolve(requested)
             if not path.is_file() or self.filesystem.is_sensitive(path):
                 raise UnsafePathError("O arquivo selecionado não pode ser usado na inspeção.")
             relative = path.relative_to(self.filesystem.root).as_posix()
-            content = self.context.git.file_at_commit(commit.commit_hash, relative)
+            content = (
+                working_tree.get(relative)
+                if working_tree is not None
+                else self.context.git.file_at_commit(commit.commit_hash, relative)
+            )
             code.append((relative, content))
         return InspectionContext(
             commit.commit_hash,
@@ -73,7 +82,7 @@ class InspectionService:
             # Poda em memória: evita descer para dentro de .venv/node_modules/etc.,
             # o que também torna a varredura rápida em vez de só filtrar o resultado.
             directory_names[:] = [
-                name for name in directory_names if not _is_excluded_directory(name)
+                name for name in directory_names if not is_excluded_directory(name)
             ]
             for file_name in file_names:
                 path = Path(current_root) / file_name
