@@ -93,3 +93,15 @@ class ReadingSessionStaleError(DevMateError):
 
 class ContextLimitError(DevMateError):
     exit_code = 5
+
+
+class DevAgentUnavailableError(DevMateError):
+    """O servidor do dev-agent (127.0.0.1:8765) não respondeu ou não está rodando."""
+
+    exit_code = 9
+
+
+class DevAgentJobFailedError(DevMateError):
+    """O job do dev-agent terminou em falha, cancelado ou bloqueado."""
+
+    exit_code = 9

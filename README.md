@@ -126,6 +126,32 @@ a explicação e o diff calculado localmente por arquivo; você confirma um a um
 para aplicar tudo de uma vez). Nada é gravado fora dos arquivos que você mesmo autorizou no
 contexto.
 
+### Delegando `edit` ao dev-agent
+
+Por padrão `edit` faz uma única chamada de LLM e escreve o arquivo inteiro proposto. Se você tem o
+[dev-agent](../../dev-agent) rodando (`dev-agent start`, na porta `127.0.0.1:8765`) com
+`dev-agent.yaml` no projeto, pode delegar a edição a ele em vez disso — plano revisável, execução
+num worktree Git isolado em background, e a Diana só aplica (`git apply`) o diff resultante depois
+que você confirmar:
+
+```bash
+devmate edit "adicione validação de entrada nesta função" --engine dev_agent
+```
+
+Ou torne isso o padrão do projeto em `.devmate/config.toml`:
+
+```toml
+[edit]
+engine = "dev_agent"
+dev_agent_url = "http://127.0.0.1:8765"
+```
+
+O fluxo: a Diana pede um plano ao dev-agent, mostra o objetivo e os arquivos relevantes,
+confirma execução, acompanha o job até terminar e mostra o diff antes de aplicar. Se o plano
+exigir uma decisão de arquitetura própria do dev-agent, a Diana para e pede para você aprovar
+diretamente pelo `dev-agent run <plan_id> --confirm` antes de tentar de novo. Se o dev-agent não
+estiver rodando, o erro chega claro (`dev-agent não está respondendo em ...`), sem travar.
+
 ## Leitura em voz alta
 
 ```bash

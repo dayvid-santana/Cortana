@@ -189,6 +189,18 @@ class DaemonConfig(BaseModel):
     preload_model: bool = True
 
 
+class EditConfig(BaseModel):
+    """Como `devmate edit` gera e aplica alterações de código."""
+
+    # "llm": uma chamada de LLM propõe o arquivo inteiro; devmate escreve direto.
+    # "dev_agent": delega ao dev-agent (plano revisável + worktree isolado); devmate
+    # só aplica o diff resultante, via `git apply`, após confirmação.
+    engine: Literal["llm", "dev_agent"] = "llm"
+    dev_agent_url: str = "http://127.0.0.1:8765"
+    dev_agent_poll_seconds: float = Field(default=2.0, ge=0.5, le=30.0)
+    dev_agent_timeout_seconds: float = Field(default=600.0, ge=10.0, le=3600.0)
+
+
 class LoggingConfig(BaseModel):
     include_content: bool = False
 
@@ -203,6 +215,7 @@ class AppConfig(BaseModel):
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
     daemon: DaemonConfig = Field(default_factory=DaemonConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    edit: EditConfig = Field(default_factory=EditConfig)
 
 
 DEFAULT_CONFIG_TOML = (
@@ -273,7 +286,15 @@ DEFAULT_CONFIG_TOML = (
     'hotkey = "ctrl+alt+d"\n'
     "preload_model = true\n\n"
     "[logging]\n"
-    "include_content = false\n"
+    "include_content = false\n\n"
+    "[edit]\n"
+    '# "llm": uma chamada de LLM propõe o arquivo inteiro; devmate escreve direto.\n'
+    '# "dev_agent": delega ao dev-agent (plano revisável + worktree isolado); devmate\n'
+    "# só aplica o diff resultante, via `git apply`, após confirmação.\n"
+    'engine = "llm"\n'
+    'dev_agent_url = "http://127.0.0.1:8765"\n'
+    "dev_agent_poll_seconds = 2.0\n"
+    "dev_agent_timeout_seconds = 600.0\n"
 )
 
 

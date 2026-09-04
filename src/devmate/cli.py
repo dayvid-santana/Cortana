@@ -37,7 +37,7 @@ from devmate.config_writer import set_default_provider, set_default_scope
 from devmate.constants import ASSISTANT_NAME
 from devmate.domain.enums import Scope
 from devmate.domain.models import LLMRequest
-from devmate.errors import DevMateError, ProviderUnavailableError
+from devmate.errors import DevAgentUnavailableError, DevMateError, ProviderUnavailableError
 from devmate.logging import configure_logging
 from devmate.prompts.activities import ARCHITECTURE_SYSTEM, CODE_REVIEW_SYSTEM
 from devmate.prompts.code_edit import CODE_EDIT_SYSTEM, DOCS_GENERATION_SYSTEM, REFACTOR_SYSTEM
@@ -786,6 +786,156 @@ def _run_edit_task(
             console.print(f"[yellow]Ignorado: {change.path}[/yellow]\n")
 
 
+def _run_dev_agent_edit_task(runtime: Runtime, *, question: str, yes: bool, as_json: bool) -> None:
+    """Delega a edição ao dev-agent: plano revisável -> worktree isolado -> diff aplicado aqui.
+
+    devmate nunca escreve por conta própria neste fluxo; só aplica (`git apply`) o
+    diff que o dev-agent produziu, depois de confirmação.
+    """
+    service = runtime.dev_agent_edit_service()
+    available, reason = service.client.available()
+    if not available:
+        raise DevAgentUnavailableError(reason or "dev-agent indisponível.")
+
+    plan = _run(lambda: service.propose(question), as_json)
+    if plan is None:
+        return
+
+    if plan.architecture_decision_required:
+        message = (
+            f"O plano '{plan.id}' exige uma decisão de arquitetura própria do dev-agent. "
+            f"Aprove com `dev-agent run {plan.id} --confirm` diretamente e rode `devmate edit` "
+            "de novo depois."
+        )
+        if as_json:
+            typer.echo(
+                json.dumps(
+                    {"engine": "dev_agent", "plan_id": plan.id, "error": message, "applied": False},
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            console.print(f"[yellow]{message}[/yellow]")
+        return
+
+    if not as_json:
+        console.print(f"[bold]{ASSISTANT_NAME} (dev-agent):[/bold] {plan.objective}\n")
+        if plan.relevant_files:
+            console.print("[dim]Arquivos relevantes:[/dim] " + ", ".join(plan.relevant_files))
+        for warning in plan.warnings:
+            console.print(f"[yellow]Aviso: {warning}[/yellow]")
+        if not yes and not typer.confirm("Executar este plano no dev-agent?", default=False):
+            console.print("[yellow]Cancelado.[/yellow]")
+            return
+    elif not yes:
+        typer.echo(
+            json.dumps(
+                {
+                    "engine": "dev_agent",
+                    "plan_id": plan.id,
+                    "objective": plan.objective,
+                    "relevant_files": list(plan.relevant_files),
+                    "warnings": list(plan.warnings),
+                    "applied": False,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return
+
+    if not as_json:
+        console.print("[dim]Executando no dev-agent (worktree isolado, em background)...[/dim]")
+    config = runtime.config.edit
+    poll, timeout = config.dev_agent_poll_seconds, config.dev_agent_timeout_seconds
+    result = _run(lambda: service.run(plan.id, poll, timeout), as_json)
+    if result is None:
+        return
+
+    if not result.succeeded:
+        message = f"O dev-agent terminou com status '{result.status}'"
+        if result.error:
+            message += f": {result.error}"
+        if as_json:
+            typer.echo(
+                json.dumps(
+                    {
+                        "engine": "dev_agent",
+                        "plan_id": plan.id,
+                        "job_id": result.job_id,
+                        "status": result.status,
+                        "error": result.error,
+                        "applied": False,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            console.print(f"[red]{message}[/red]")
+        return
+
+    if not result.has_changes:
+        if as_json:
+            typer.echo(
+                json.dumps(
+                    {
+                        "engine": "dev_agent",
+                        "plan_id": plan.id,
+                        "job_id": result.job_id,
+                        "status": result.status,
+                        "applied": False,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            console.print("[yellow]O dev-agent não produziu alterações.[/yellow]")
+        service.cleanup(result.job_id)
+        return
+
+    if not as_json:
+        console.print(f"[bold]--- diff (branch {result.branch or '?'}) ---[/bold]")
+        console.print(result.diff)
+        if not yes and not typer.confirm("Aplicar este diff ao working tree?", default=False):
+            console.print(
+                f"[yellow]Ignorado. O worktree do dev-agent segue em "
+                f"{result.worktree_path}.[/yellow]"
+            )
+            return
+    elif not yes:
+        typer.echo(
+            json.dumps(
+                {
+                    "engine": "dev_agent",
+                    "plan_id": plan.id,
+                    "job_id": result.job_id,
+                    "status": result.status,
+                    "diff": result.diff,
+                    "applied": False,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return
+
+    _run(lambda: service.apply(result.diff), as_json)
+    service.cleanup(result.job_id)
+    if as_json:
+        typer.echo(
+            json.dumps(
+                {
+                    "engine": "dev_agent",
+                    "plan_id": plan.id,
+                    "job_id": result.job_id,
+                    "status": result.status,
+                    "applied": True,
+                },
+                ensure_ascii=False,
+            )
+        )
+    else:
+        console.print("[green]Alterações aplicadas.[/green]")
+
+
 @app.command()
 def edit(
     question: str,
@@ -794,6 +944,10 @@ def edit(
     full_repo: Annotated[bool, typer.Option("--full-repo")] = False,
     provider: Annotated[str | None, typer.Option("--provider")] = None,
     model: Annotated[str | None, typer.Option("--model")] = None,
+    engine: Annotated[
+        str | None,
+        typer.Option("--engine", help='"llm" (padrão) ou "dev_agent" (plano + worktree isolado).'),
+    ] = None,
     yes: Annotated[
         bool, typer.Option("--yes", help="Aplica as alterações sem confirmar arquivo por arquivo.")
     ] = False,
@@ -802,6 +956,10 @@ def edit(
     """Propõe uma alteração de código sobre arquivos autorizados; nada é escrito sem confirmação."""
     runtime = _run(_runtime, as_json)
     if runtime is None:
+        return
+    effective_engine = engine or runtime.config.edit.engine
+    if effective_engine == "dev_agent":
+        _run_dev_agent_edit_task(runtime, question=question, yes=yes, as_json=as_json)
         return
     _run_edit_task(
         runtime,

@@ -25,12 +25,15 @@ class SubprocessGit:
         probe = cls(start, timeout_seconds=timeout_seconds)
         return cls(probe.discover_root(start), timeout_seconds=timeout_seconds)
 
-    def _run(self, arguments: Sequence[str], check: bool = True) -> str:
+    def _run(
+        self, arguments: Sequence[str], check: bool = True, input_text: str | None = None
+    ) -> str:
         command = [self.executable, *arguments]
         try:
             result = subprocess.run(
                 command,
                 cwd=self.root,
+                input=input_text,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -210,3 +213,28 @@ class SubprocessGit:
     def changed_files(self, revision: str) -> list[str]:
         output = self._run(["diff-tree", "--root", "-r", "--no-commit-id", "--name-only", revision])
         return [item for item in output.splitlines() if item]
+
+    def apply_check(self, diff_text: str) -> tuple[bool, str]:
+        """Valida se um diff se aplicaria limpo, sem tocar no working tree."""
+        command = [self.executable, "apply", "--check", "-"]
+        try:
+            result = subprocess.run(
+                command,
+                cwd=self.root,
+                input=diff_text,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=self.timeout_seconds,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            raise GitCommandError("Git não foi encontrado no PATH.") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise GitCommandError(f"Git excedeu o timeout de {self.timeout_seconds}s.") from exc
+        return result.returncode == 0, (result.stderr.strip() or result.stdout.strip())
+
+    def apply(self, diff_text: str) -> None:
+        """Aplica um diff unificado ao working tree; chame `apply_check` antes."""
+        self._run(["apply", "--whitespace=nowarn", "-"], input_text=diff_text)

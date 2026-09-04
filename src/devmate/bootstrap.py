@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from devmate.adapters.agents.dev_agent_client import DevAgentClient
 from devmate.adapters.filesystem.local_filesystem import LocalFilesystem
 from devmate.adapters.git.subprocess_git import SubprocessGit
 from devmate.adapters.llm.registry import ProviderRegistry
@@ -17,6 +18,7 @@ from devmate.adapters.persistence.repositories import RepositoryStore
 from devmate.adapters.speech.registry import get_speech_input_provider, get_speech_provider
 from devmate.application.context_service import ContextService
 from devmate.application.conversation_service import ConversationService
+from devmate.application.dev_agent_edit_service import DevAgentEditService
 from devmate.application.edit_service import EditProposalService
 from devmate.application.inspection_conversation_service import InspectionConversationService
 from devmate.application.inspection_service import InspectionService
@@ -77,6 +79,15 @@ class Runtime:
 
     def edit_service(self) -> EditProposalService:
         return EditProposalService(self.inspection_service(), self.filesystem, self.providers)
+
+    def dev_agent_client(self) -> DevAgentClient:
+        return DevAgentClient(
+            base_url=self.config.edit.dev_agent_url,
+            timeout_seconds=self.config.edit.dev_agent_timeout_seconds,
+        )
+
+    def dev_agent_edit_service(self) -> DevAgentEditService:
+        return DevAgentEditService(self.dev_agent_client(), self.git, self.root)
 
     def speech_provider(
         self, provider_name: str | None = None, voice: str | None = None
