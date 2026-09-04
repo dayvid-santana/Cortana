@@ -9,7 +9,7 @@ from devmate.application.edit_service import EditProposalService
 from devmate.application.project_service import initialize_project
 from devmate.bootstrap import load_runtime
 from devmate.domain.models import LLMResponse
-from devmate.errors import ProviderResponseError
+from devmate.errors import ProviderResponseError, ProviderUnavailableError
 
 
 class _FixedProvider:
@@ -101,3 +101,18 @@ def test_propose_with_no_file_blocks_returns_no_changes(git_repo: Path) -> None:
 
     assert proposal.changes == ()
     assert proposal.narrative == "Nenhuma alteração é necessária."
+
+
+def test_propose_rejects_codex_with_a_clear_error_instead_of_an_empty_proposal(
+    git_repo: Path,
+) -> None:
+    """Regressão: codex roda sempre em Sandbox.read_only (ver CodexProvider) e nunca
+    produz um `>>> FILE:` de verdade — só uma resposta em prosa explicando que não
+    pode editar. Sem esta checagem, propose() devolvia uma proposta vazia e confusa
+    em vez de um erro dizendo por que aquele provider não serve para isto."""
+    service, project_id = _service_over_repo(
+        git_repo, "Não posso alterar arquivos nesta sessão, pois o contexto é somente leitura."
+    )
+
+    with pytest.raises(ProviderUnavailableError, match="somente leitura"):
+        service.propose(project_id, "adicione um cabeçalho", "codex", None, ["src/app.py"])

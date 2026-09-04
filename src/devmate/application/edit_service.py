@@ -11,10 +11,18 @@ from devmate.adapters.llm.registry import ProviderRegistry
 from devmate.application.inspection_service import InspectionService
 from devmate.domain.enums import Scope
 from devmate.domain.models import LLMRequest
-from devmate.errors import ProviderResponseError
+from devmate.errors import ProviderResponseError, ProviderUnavailableError
 from devmate.prompts.code_edit import CODE_EDIT_SYSTEM
 
 _FILE_BLOCK = re.compile(r">>> FILE: *(?P<path>[^\n]+)\n(?P<body>.*?)\n<<< END FILE", re.DOTALL)
+
+# O provider codex roda sempre em sandbox somente leitura (ver CodexProvider.complete:
+# Sandbox.read_only + instrução explícita de não modificar arquivos) — isso é uma
+# característica estrutural do adapter, não algo que varia por tarefa. Usá-lo aqui só
+# produz uma resposta em prosa explicando por que não pode editar, nunca um
+# ">>> FILE:" de verdade, então falhar cedo e com uma mensagem clara é melhor do que
+# deixar `_parse_response` devolver uma proposta vazia e confusa.
+_READ_ONLY_PROVIDERS = frozenset({"codex"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +98,12 @@ class EditProposalService:
         system_instructions: str | None = None,
         task: str = "code_edit",
     ) -> EditProposal:
+        if provider_name in _READ_ONLY_PROVIDERS:
+            raise ProviderUnavailableError(
+                f"O provider '{provider_name}' é somente leitura por design e nunca propõe "
+                "edições — escolha outro provider (ex.: openai) para editar diretamente, ou "
+                "use o dev-agent."
+            )
         context = self.inspection.build(project_id, commit_ref, files, full_repo)
         originals = dict(context.code_files)
         request = LLMRequest(
