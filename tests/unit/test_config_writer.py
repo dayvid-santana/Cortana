@@ -38,7 +38,7 @@ def test_set_speech_voice_does_not_touch_provider_when_not_given(tmp_path: Path)
     set_speech_voice(path, "marin")
 
     content = path.read_text(encoding="utf-8")
-    assert 'provider = "system"' in content
+    assert 'provider = "edge"' in content
 
 
 def test_set_speech_style_writes_a_new_key(tmp_path: Path) -> None:

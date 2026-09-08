@@ -9,5 +9,6 @@ max_diff_chars = 80000
 follow_external_symlinks = false
 
 [speech]
-provider = "system"
+provider = "edge"
 rate = 180
+voice = "pt-BR-FranciscaNeural"

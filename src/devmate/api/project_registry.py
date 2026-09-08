@@ -11,7 +11,7 @@ from pathlib import Path
 from devmate.adapters.git.subprocess_git import SubprocessGit
 from devmate.application.project_service import initialize_project
 from devmate.bootstrap import Runtime, load_runtime
-from devmate.errors import RepositoryNotFoundError
+from devmate.errors import RepositoryNotFoundError, UnsafePathError
 
 
 def web_project_id(root: Path) -> str:
@@ -62,7 +62,13 @@ class ProjectRegistry:
         raise RepositoryNotFoundError("Projeto não encontrado.")
 
     def register(self, requested_path: str, name: str | None = None) -> RegisteredProject:
-        root = SubprocessGit.from_start(Path(requested_path).expanduser()).root
+        requested = Path(requested_path).expanduser().resolve()
+        root = SubprocessGit.from_start(requested).root
+        if requested != root:
+            raise UnsafePathError(
+                "O caminho informado não é a raiz Git do projeto. "
+                f"A raiz detectada é '{root}'. Informe essa raiz explicitamente."
+            )
         project = RegisteredProject(web_project_id(root), root, name or root.name)
         existing = {item.id: item for item in self.list()}
         existing[project.id] = project

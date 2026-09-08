@@ -18,6 +18,7 @@ from devmate.constants import (
     DEFAULT_MAX_FILE_BYTES,
     DEFAULT_PROVIDER,
     DEFAULT_SPEECH_PROVIDER,
+    DEFAULT_SPEECH_VOICE,
 )
 from devmate.domain.enums import Scope
 from devmate.errors import ConfigurationError
@@ -113,9 +114,9 @@ class SpeechProvidersConfig(BaseModel):
 class SpeechConfig(BaseModel):
     provider: str = DEFAULT_SPEECH_PROVIDER
     rate: int = Field(default=180, ge=80, le=450)
-    # Para "system", um trecho do nome da voz local. Para "openai", o id da voz
-    # (ex.: "marin"). Vazio mantém a voz padrão do provider selecionado.
-    voice: str | None = None
+    # Para "edge", o identificador da voz (ex.: "pt-BR-FranciscaNeural"). Para
+    # "system", um trecho do nome local; para "openai", o id da voz (ex.: "marin").
+    voice: str | None = DEFAULT_SPEECH_VOICE
     # Preset de estilo (ex.: "technical_calm"); só tem efeito em modelos que
     # suportam instruções de leitura. Providers sem suporte o ignoram.
     style: str | None = None
@@ -263,11 +264,11 @@ DEFAULT_CONFIG_TOML = (
     'ignored_patterns = [".env", ".env.*", "*.pem", "*.key", "id_rsa", '
     '"id_ed25519", "credentials*", "secrets*"]\n\n'
     "[speech]\n"
-    'provider = "system"\n'
+    'provider = "edge"\n'
     "rate = 180\n"
-    '# Para provider = "system", um trecho do nome (ex.: "Maria").\n'
-    '# Para provider = "openai", o id da voz (ex.: "marin"). Use `devmate voices list`.\n'
-    '# voice = "marin"\n'
+    '# Voz feminina padrão do Edge TTS; não requer chave de API.\n'
+    '# Para outros providers, use `devmate voices list` para ver as opções.\n'
+    'voice = "pt-BR-FranciscaNeural"\n'
     '# style = "technical_calm"\n\n'
     "[speech.providers.openai]\n"
     'model = "gpt-4o-mini-tts"\n'

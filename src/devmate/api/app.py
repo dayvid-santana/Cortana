@@ -1337,7 +1337,14 @@ def _execute_chat_run(
         if scope == "edit":
             _run_edit_chat(state, runtime, message, provider, commit)
             return
-        if scope in {"docs", "code"} and _looks_like_edit_intent(message):
+        if scope == "code" and _looks_like_edit_intent(message):
+            # Code is the natural place to ask about an implementation and then ask
+            # for its change. Route an explicit change request through the same
+            # reviewable agent pipeline as Edit; the proposal still needs Apply
+            # before any file is written.
+            _run_edit_chat(state, runtime, message, provider, commit)
+            return
+        if scope == "docs" and _looks_like_edit_intent(message):
             _suggest_edit_scope(state, runtime, message, scope, provider)
             return
         if scope == "docs":

@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from devmate.config import DEFAULT_CONFIG_TOML, AppConfig, load_dotenv
-from devmate.constants import ASSISTANT_NAME
+from devmate.constants import ASSISTANT_NAME, DEFAULT_SPEECH_VOICE
 from devmate.domain.enums import Scope
 
 
@@ -64,6 +64,13 @@ def test_default_scope_is_docs() -> None:
     config = AppConfig.model_validate(tomllib.loads(DEFAULT_CONFIG_TOML))
 
     assert config.security.default_scope is Scope.DOCS
+
+
+def test_default_speech_uses_a_feminine_portuguese_voice() -> None:
+    config = AppConfig.model_validate(tomllib.loads(DEFAULT_CONFIG_TOML))
+
+    assert config.speech.provider == "edge"
+    assert config.speech.voice == DEFAULT_SPEECH_VOICE
 
 
 def test_default_scope_can_be_set_to_code() -> None:

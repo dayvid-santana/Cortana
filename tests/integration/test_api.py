@@ -198,6 +198,22 @@ def test_web_projects_register_and_expose_real_files(
     assert content.json()["path"] == files[0]["path"]
 
 
+def test_web_projects_rejects_a_subdirectory_that_would_register_another_git_root(
+    git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A project path must identify the Git root, never an arbitrary child directory."""
+    monkeypatch.setattr("devmate.api.app.projects", ProjectRegistry(tmp_path / "projects.json"))
+    client = TestClient(app)
+    nested = git_repo / "docs"
+
+    response = client.post("/api/v1/projects", json={"path": str(nested)})
+
+    assert response.status_code == 400
+    assert "raiz Git" in response.json()["detail"]
+    assert str(git_repo) in response.json()["detail"]
+    assert not (tmp_path / "projects.json").exists()
+
+
 def test_web_projects_list_skips_a_registered_project_whose_directory_is_gone(
     git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

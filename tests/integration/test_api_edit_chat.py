@@ -259,6 +259,54 @@ def test_docs_scope_suggests_edit_instead_of_answering_when_message_requests_a_c
         assert "Edit" in message["content"]
 
 
+def test_code_scope_routes_change_requests_through_the_reviewable_edit_pipeline(
+    git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Code delegates a change request to the dev-agent, without writing it."""
+    monkeypatch.delenv("DEVMATE_PROVIDER", raising=False)
+    monkeypatch.delenv("DEVMATE_MODEL", raising=False)
+    monkeypatch.setattr("devmate.api.app.projects", ProjectRegistry(tmp_path / "projects.json"))
+    _add_a_source_file(git_repo)
+
+    with _live_server() as base_url, httpx.Client(base_url=base_url) as client:
+        project = client.post("/api/v1/projects", json={"path": str(git_repo)}).json()
+        success = {
+            "status": "completed",
+            "diff": (
+                "diff --git a/app.py b/app.py\n"
+                "--- a/app.py\n"
+                "+++ b/app.py\n"
+                "@@ -1,2 +1,3 @@\n"
+                "+# Validation proposed by dev-agent\n"
+                " def greet():\n"
+                "     return 'oi'\n"
+            ),
+        }
+        with _fake_dev_agent_server(success) as dev_agent_url:
+            _point_dev_agent_at(git_repo, dev_agent_url)
+            created = client.post(
+                f"/api/v1/projects/{project['id']}/chat/runs",
+                json={
+                    "message": "adicione validação à função greet",
+                    "scope": "code",
+                    "commitHash": project["activeCommitHash"],
+                    "provider": "mock",
+                },
+            )
+            assert created.status_code == 202, created.text
+            run = created.json()
+
+            with client.stream("GET", f"/api/v1/runs/{run['id']}/events") as response:
+                payload = _read_until_run_completed(response)
+        completed = _extract_event_data(payload, "run.completed")
+        message = completed["message"]
+        assert isinstance(message, dict)
+        proposal = message["editProposal"]
+        assert isinstance(proposal, dict)
+        assert proposal["engine"] == "dev_agent"
+        assert proposal["applied"] is False
+
+
 @pytest.mark.parametrize(
     "message",
     [
