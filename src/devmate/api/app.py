@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import time
 from collections.abc import Iterator
@@ -113,12 +114,20 @@ app = FastAPI(
 
 # Local-first (seção 4.1/40.2 do plano de frontend): nenhuma origem remota por
 # padrão, só o servidor de desenvolvimento do Vite rodando na mesma máquina.
-_ALLOWED_ORIGINS = [
+# Em deploy, defina DEVMATE_CORS_ORIGINS (lista separada por vírgula) com a(s)
+# origem(ns) real(is) do frontend publicado — nunca use "*" aqui.
+_DEFAULT_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://localhost:5173",
     "http://127.0.0.1:5174",
     "http://localhost:5174",
 ]
+_env_origins = os.environ.get("DEVMATE_CORS_ORIGINS", "").strip()
+_ALLOWED_ORIGINS = (
+    [origin.strip() for origin in _env_origins.split(",") if origin.strip()]
+    if _env_origins
+    else _DEFAULT_ORIGINS
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -127,6 +136,23 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT"],
     allow_headers=["*"],
 )
+
+# Opcional: exige `X-API-Key` em todo request fora de /api/v1/health quando
+# DEVMATE_API_KEY está definido no ambiente. Sem essa variável (padrão local),
+# o comportamento não muda. É a única barreira de autenticação da API — use-a
+# sempre que `serve --host 0.0.0.0` for alcançável fora de uma rede confiável.
+_API_KEY = os.environ.get("DEVMATE_API_KEY", "").strip()
+
+
+@app.middleware("http")
+async def _require_api_key(request: Request, call_next: Any) -> Response:
+    if (
+        _API_KEY
+        and request.url.path != "/api/v1/health"
+        and request.headers.get("x-api-key") != _API_KEY
+    ):
+        return JSONResponse(status_code=401, content={"detail": "Invalid or missing API key"})
+    return cast(Response, await call_next(request))
 
 projects = ProjectRegistry()
 _started_at = time.monotonic()

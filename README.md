@@ -274,7 +274,20 @@ curl -X POST http://127.0.0.1:8000/api/v1/chat \
 
 `scope` é `"docs"` por padrão; `"code"` exige `files` ou `full_repo: true` no corpo da requisição, com a mesma autorização explícita do `inspect --full-repo`. A resposta traz `sources` estruturadas (`path`, `start_line`, `end_line`, `commit_hash`, `heading`) para o frontend linkar direto ao trecho citado, nunca inventadas a partir do texto. `source: "speech"` no corpo pede uma resposta mais concisa, para perguntas que vieram de voz transcrita.
 
-CORS aceita o dev server padrão em `http://127.0.0.1:5174`/`http://localhost:5174` (e mantém `5173` por compatibilidade); `--host` continua `127.0.0.1` por padrão — não exponha em `0.0.0.0` fora de uma rede confiável. O schema OpenAPI fica disponível em `/openapi.json` para gerar um cliente tipado.
+CORS aceita o dev server padrão em `http://127.0.0.1:5174`/`http://localhost:5174` (e mantém `5173` por compatibilidade), a menos que `DEVMATE_CORS_ORIGINS` esteja definida (lista separada por vírgula); `--host` continua `127.0.0.1` por padrão. O schema OpenAPI fica disponível em `/openapi.json` para gerar um cliente tipado.
+
+### Deploy remoto (fora de localhost)
+
+Por padrão a API não tem autenticação — ela confia na fronteira de rede (loopback ou a rede Docker local). Antes de publicar `devmate serve` em qualquer host acessível pela internet:
+
+1. Defina `DEVMATE_API_KEY` (ex.: `openssl rand -hex 32`). Toda rota além de `/api/v1/health` passa a exigir o header `X-API-Key`; sem essa variável o comportamento não muda.
+2. Defina `DEVMATE_CORS_ORIGINS` com a(s) origem(ns) exata(s) do frontend publicado (nunca `*`).
+3. Rode atrás de um reverse proxy com TLS (Caddy, Traefik, nginx+certbot) — a API em si não fala HTTPS.
+4. Use `--host 0.0.0.0` só dentro do container/rede confiável (como já faz `compose.yaml`); nunca na máquina host diretamente.
+
+Essas variáveis já são lidas pelo `compose.yaml` (serviço `backend`) a partir de um `.env` local — ver `.env.example`.
+
+**O agent-runner "Cortana" em `127.0.0.1:8765`** (repositório irmão `dev-agent`, com poder de escrita no seu código) é intencionalmente local-only e não tem essas proteções — a tela `/agents` da Diana continua exigindo que ele rode na própria máquina de quem acessa, mesmo com a Diana publicada. Não exponha esse serviço à internet.
 
 Além de `health`/`status`/`chat`, a API expõe o restante do contrato consumido pelo frontend web: `/projects` (registrar, listar, escanear), `/projects/{id}/commits`, `/files`(`/diff`), `/decisions`, `/questions`, `/threads`, `/projects/{id}/chat/runs` com stream SSE em `/runs/{id}/events`, `/diagnostics` (o mesmo `doctor()` da CLI, em JSON), `/providers` e `/providers/{name}` (a `ProviderRegistry` real, com roteamento por tarefa em `PUT /projects/{id}/settings/providers`), `/speech/providers`, `/speech/voices` (+ preview de voz) e `/projects/{id}/settings/speech`, e `/projects/{id}/reading-sessions` com áudio por segmento gerado sob demanda pelo provider de fala configurado — ver `src/devmate/api/app.py`. Nenhum desses endpoints usa dado fabricado: tudo vem dos mesmos application services da CLI. Duas limitações reais valem notar: o provider de fala `system` (padrão) fala direto pelo sistema operacional e não gera arquivo de áudio, então preview de voz e sessões de leitura só tocam no navegador com `speech.provider = "openai"`; e o modo `explain` de uma sessão de leitura chama o provider de LLM padrão do projeto por trecho (`mock` por padrão, determinístico mas não uma explicação real).
 

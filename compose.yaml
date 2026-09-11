@@ -24,6 +24,13 @@ services:
     working_dir: /workspace
     environment:
       PYTHONPATH: /workspace/src
+      # Deixe vazio para uso local; defina os dois ao publicar esta API fora
+      # de uma rede confiável (ex.: VPS acessível pela internet) — sem
+      # DEVMATE_API_KEY, qualquer origem que passe pelo CORS consegue ler e
+      # escrever no repositório montado. Gere a chave com, por exemplo,
+      # `openssl rand -hex 32`.
+      DEVMATE_API_KEY: ${DEVMATE_API_KEY:-}
+      DEVMATE_CORS_ORIGINS: ${DEVMATE_CORS_ORIGINS:-}
     volumes:
       - .:/workspace
     command: ["serve", "--host", "0.0.0.0", "--port", "8000"]
@@ -31,6 +38,7 @@ services:
       - "8000:8000"
     networks:
       - devmate-net
+    restart: unless-stopped
 
 networks:
   # Nome fixo (sem `external: true`) compartilhado com o compose do frontend:
